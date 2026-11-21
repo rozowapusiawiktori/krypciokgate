@@ -6012,8 +6012,11 @@ async function handleFgCallback(query) {
 		}
 
 		if (data === "fg_admin_add_admin") {
+			console.log(`[cb] add_admin canManage=${await canManageAdmins(userId)}`);
 			if (!(await canManageAdmins(userId))) return true;
 			await editUserDB(userId, { adminState: JSON.stringify({ action: "awaiting_add_admin" }) });
+			const _chk = await User.findOne({ id: userId });
+			console.log(`[cb] add_admin zapisane adminState=${_chk?.adminState}`);
 			await sendFgMessage(userId, `${pe("plus", "➕")} <b>Dodawanie administratora</b>\n\n<blockquote>Wpisz <b>ID użytkownika</b>, któremu chcesz przyznać uprawnienia administratora.</blockquote>`);
 			return true;
 		}
