@@ -406,43 +406,21 @@ async function applyCloudflareGatewaySecurity(zoneId, domain) {
 	}
 
 	try {
+		// Darmowy plan Cloudflare dopuszcza tylko JEDNĄ regułę rate limit —
+		// dlatego jedna zbiorcza reguła zamiast trzech.
 		await axios.put(
 			`${CONFIG.CLOUDFLARE.API_URL}/zones/${zoneId}/rulesets/phases/http_ratelimit/entrypoint`,
 			{
 				rules: [
 					{
 						action: "block",
-						expression: '(http.request.uri.path contains "/api/")',
-						description: "Banita: API limit 120/10s",
-						enabled: true,
-						ratelimit: {
-							characteristics: ["cf.colo.id", "ip.src"],
-							period: 10,
-							requests_per_period: 120,
-							mitigation_timeout: 10,
-						},
-					},
-					{
-						action: "block",
 						expression: "true",
-						description: "Banita: limit ogolny 200/10s",
+						description: "Banita: limit 200/10s",
 						enabled: true,
 						ratelimit: {
-							characteristics: ["cf.colo.id", "ip.src"],
+							characteristics: ["ip.src"],
 							period: 10,
 							requests_per_period: 200,
-							mitigation_timeout: 10,
-						},
-					},
-					{
-						action: "block",
-						expression: "true",
-						description: "Banita: twardy limit DDoS 500/10s",
-						enabled: true,
-						ratelimit: {
-							characteristics: ["cf.colo.id", "ip.src"],
-							period: 10,
-							requests_per_period: 500,
 							mitigation_timeout: 10,
 						},
 					},
@@ -452,7 +430,12 @@ async function applyCloudflareGatewaySecurity(zoneId, domain) {
 		);
 		console.log(`[Cloudflare] Rate limit bramka OK: ${domain}`);
 	} catch (err) {
-		console.warn(`[Cloudflare] Rate limit bramka ${domain}:`, err.response?.data?.errors || err.message);
+		const code = err.response?.data?.errors?.[0]?.code;
+		if (code === 50001) {
+			console.warn(`[Cloudflare] Rate limit ${domain}: plan nie pozwala — pomijam`);
+		} else {
+			console.warn(`[Cloudflare] Rate limit bramka ${domain}:`, err.response?.data?.errors || err.message);
+		}
 	}
 
 	return true;
