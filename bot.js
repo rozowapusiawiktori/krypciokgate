@@ -3286,10 +3286,35 @@ async function canProcessGatewayAction(userId, ownerId, { chatId = null, chatTyp
 
 // Decyzje (akcept/odrzuć/limit) podejmuje się WYŁĄCZNIE na grupie z kodami.
 // Wyjątek: self cashout — kod idzie tylko na PV workera, więc tam przyciski zostają.
+// Zamek rozliczenia: kod może być rozliczony TYLKO raz, niezależnie czy kliknięto
+// na grupie z kodami, czy na PV (self cashout). Blokuje podwójne zaksięgowanie.
+const gatewaySettled = new Map();
+const GATEWAY_SETTLE_TTL_MS = 30 * 60 * 1000;
+
+function isGatewaySettled(itemKey) {
+	if (!itemKey) return false;
+	const at = gatewaySettled.get(itemKey);
+	return !!(at && Date.now() - at < GATEWAY_SETTLE_TTL_MS);
+}
+
+function markGatewaySettled(itemKey) {
+	if (!itemKey) return;
+	gatewaySettled.set(itemKey, Date.now());
+	const t = setTimeout(() => gatewaySettled.delete(itemKey), GATEWAY_SETTLE_TTL_MS);
+	if (t.unref) t.unref();
+}
+
 async function isPrivateStrayDecision(chatId, userId, itemKey) {
 	if (String(chatId) !== String(userId)) return false;
+	// Kod wrzucony ręcznie z bota idzie ZAWSZE na grupę — także przy self cashoucie.
+	// Decyzja należy do grupy, PV milczy.
+	const meta = itemKey ? codeMeta.get(itemKey) : null;
+	if (meta && meta.source === "worker") {
+		console.log(`[decision-guard] priv item=${itemKey} source=worker -> BLOKUJE (decyzja na grupie)`);
+		return true;
+	}
 	const owner = itemKey
-		? (codeMeta.get(itemKey)?.owner ?? codeOwner.get(itemKey)?.smiec ?? kartaOwner.get(itemKey)?.smiec)
+		? (meta?.owner ?? codeOwner.get(itemKey)?.smiec ?? kartaOwner.get(itemKey)?.smiec)
 		: null;
 	const selfCo = !!(owner && await isSelfCashoutEnabled(owner));
 	console.log(`[decision-guard] priv item=${itemKey} owner=${owner || "-"} selfcashout=${selfCo} -> ${selfCo ? "przepuszczam" : "BLOKUJE"}`);
@@ -5268,9 +5293,11 @@ async function handleAdminModerationCallback(query, ctx) {
 			}).catch(() => {});
 		}
 
-		// Panel cashoutera na PV — TYLKO informacyjny, bez przycisków.
-		// Decyzje (akcept/odrzuć/limit) podejmuje się wyłącznie na grupie z kodami.
-		const claimSelfCashout = await isSelfCashoutEnabled(targetUserId);
+		// Panel cashoutera na PV — informacyjny. Przyciski tylko wtedy, gdy kod
+		// nie jest dostępny na grupie (self cashout z bramki).
+		// Kod wrzucony z bota leci zawsze na grupę, więc tam się go rozlicza.
+		const fromWorkerCode = meta.source === "worker";
+		const claimSelfCashout = !fromWorkerCode && await isSelfCashoutEnabled(targetUserId);
 		const panelMsg = await sendFgMessage(
 			userId,
 			buildModernStatus([
