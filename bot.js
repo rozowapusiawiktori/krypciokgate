@@ -4889,7 +4889,7 @@ async function saveUserDomain(userId, rawDomain) {
 
 	const dnsList = zoneId
 		? nameservers.slice(0, 2).map((ns) => `<code>${ns}</code>`).join("\n")
-		: `<code>CNAME * → ${host}</code>\n<code>A @ → ${host}</code>`;
+		: `<code>CNAME * → ${host}</code>\n<code>CNAME @ → ${host}</code>`;
 
 	const text = `✅ Domena <code>${domain}</code> dodana.\n\n<u>Ustaw DNS:</u>\n${dnsList}`;
 
