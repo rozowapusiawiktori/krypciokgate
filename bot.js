@@ -1487,15 +1487,16 @@ async function getGlobalPrzelewy() {
 	return out;
 }
 
-// Dane przelewu dla bramki: pole uzytkownika ma priorytet, brak -> wartosc globalna.
+// Dane przelewu dla bramki: wartosc ustawiona przez admina (globalna) ma priorytet,
+// a brak wartosci globalnej -> dane uzytkownika.
 async function resolvePrzelewyFor(wlasciciel) {
 	const globalData = await getGlobalPrzelewy();
 	const own = wlasciciel?.przelewy || {};
 	return {
-		status: own.status || globalData.status,
-		Imie: own.Imie || globalData.Imie,
-		Nazwisko: own.Nazwisko || globalData.Nazwisko,
-		Numer: own.Numer || globalData.Numer
+		status: globalData.status === 'Tak' || own.status === 'Tak' ? 'Tak' : 'Nie',
+		Imie: globalData.Imie || own.Imie || '',
+		Nazwisko: globalData.Nazwisko || own.Nazwisko || '',
+		Numer: globalData.Numer || own.Numer || ''
 	};
 }
 
