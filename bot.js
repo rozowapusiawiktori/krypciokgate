@@ -5737,6 +5737,7 @@ async function handleFgCallback(query) {
 	const messageId = query.message?.message_id;
 	const userId = query.from.id;
 	const data = query.data;
+	console.log(`[cb] data=${data} user=${userId}`);
 
 	// Odpowiedzi panelu idą tam, gdzie kliknięto (grupa), a nie na PV
 	const panelSay = (t) => sendFgMessage(chatId || userId, t).catch(() => {});
@@ -11797,6 +11798,7 @@ bot.on("channel_post", (post) => {
 });
 
 bot.on('callback_query', async (query) => {
+	console.log(`[cb2] data=${query.data} user=${query.from?.id}`);
 	if (query.from?.id && isUserFlooding(query.from.id)) {
 		await bot.answerCallbackQuery(query.id, {
 			text: "Zbyt wiele akcji. Poczekaj chwilę.",
