@@ -4031,7 +4031,13 @@ bot.onText(/^\/admin(?:@\w+)?$/, async (msg) => {
 		return;
 	}
 
-	await sendFgAdminMenu(chatId);
+	try {
+		await sendFgAdminMenu(chatId);
+		console.log(`[/admin] menu wyslane do ${chatId}`);
+	} catch (e) {
+		console.error(`[/admin] BLAD menu:`, e.message);
+		await bot.sendMessage(chatId, `Błąd menu: ${e.message}`).catch(() => {});
+	}
 });
 
 // Diagnostyka uprawnien — /checkadmin
