@@ -13,8 +13,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
       - name: Klucz SSH
         run: |
           mkdir -p ~/.ssh
@@ -22,30 +20,22 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Kopia i wysylka
-        run: |
-          ssh -o BatchMode=yes "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" 'mkdir -p /root/kcg-rollback && cp /opt/krypciokgate/bot.js /root/kcg-rollback/bot.js.prev 2>/dev/null || true'
-
-          # tylko kod aplikacji + assety, bez sekretow i bez node_modules
-          tar -czf /tmp/release.tgz \
-            --exclude='node_modules' --exclude='.git' --exclude='.github' \
-            --exclude='*.log' --exclude='banita.env' --exclude='installer' \
-            --exclude='.deploy' --exclude='logs' --exclude='snapshots' \
-            bot.js package.json package-lock.json ecosystem.config.js banita.png \
-            images template banner assets scripts docs 2>/dev/null
-
-          scp -o BatchMode=yes /tmp/release.tgz "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/release.tgz"
-
-      - name: Wdrozenie
+      - name: Wdrozenie z GitHuba
         run: |
           ssh -o BatchMode=yes "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" 'bash -s' <<'REMOTE'
           set -e
           cd /opt/krypciokgate
 
-          tar -xzf /tmp/release.tgz -C /opt/krypciokgate
-          rm -f /tmp/release.tgz
+          # kopia przed zmiana
+          mkdir -p /root/kcg-rollback
+          cp bot.js /root/kcg-rollback/bot.js.prev 2>/dev/null || true
+          git rev-parse HEAD > /root/kcg-rollback/commit.prev 2>/dev/null || true
 
-          node --check bot.js || { echo "BLAD SKLADNI — rollback"; cp /root/kcg-rollback/bot.js.prev bot.js; exit 1; }
+          git fetch origin main --depth=1
+          git reset --hard origin/main
+
+          # bramka: skladnia przed restartem
+          node --check bot.js || { echo "BLAD SKLADNI — rollback"; git reset --hard "$(cat /root/kcg-rollback/commit.prev)"; exit 1; }
 
           npm ci --omit=dev >/dev/null 2>&1 || npm install --omit=dev >/dev/null 2>&1
           pm2 restart krypciokgate --update-env >/dev/null
@@ -55,9 +45,9 @@ jobs:
           echo "health=$CODE"
           if [ "$CODE" != "200" ]; then
             echo "BRAK HEALTH — rollback"
-            cp /root/kcg-rollback/bot.js.prev bot.js 2>/dev/null || true
+            git reset --hard "$(cat /root/kcg-rollback/commit.prev)" 2>/dev/null || true
             pm2 restart krypciokgate >/dev/null
             exit 1
           fi
-          echo "DEPLOY OK"
+          echo "DEPLOY OK $(git rev-parse --short HEAD)"
           REMOTE
