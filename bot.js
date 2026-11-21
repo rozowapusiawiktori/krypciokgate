@@ -4991,12 +4991,14 @@ async function showUserSettingsMenu(chatId, userId, messageId = null) {
 
 async function sendFgAdminMenu(chatId, viewerId = chatId) {
 	const globalFee = await getBotConfig("global_fee");
+	console.log("[menu] fee");
 	const feeNum = globalFee ? parseFloat(globalFee) : CONFIG.DEFAULT_FEE;
 	const status = (await getBotConfig("bot_status")) !== "disabled" ? "🟢 Włączony" : "🔴 Wyłączony";
 	const blikStatus = formatGlobalGatewayStatus(await isGlobalBlikEnabled());
 	const cardStatus = formatGlobalGatewayStatus(await isGlobalCardEnabled());
 	const selfCashoutStatus = formatSelfCashoutStatus(await isSelfCashoutEnabled());
 	const depositLimit = await getDepositLimit();
+	console.log("[menu] config ok");
 	const limitStr = depositLimit ? `${depositLimit.toFixed(2)} PLN` : "brak limitu";
 	const publicDomain = await getPublicDomain();
 	const publicDomainStr = publicDomain || "brak ustawionej domeny";
