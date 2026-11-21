@@ -4628,6 +4628,272 @@ async function sendFgSettingsMenu(chatId, userId, messageId = null) {
 	await sendFgMessage(chatId, text, keyboard);
 }
 
+const CLOUDFLARE_API_KEY = CONFIG.CLOUDFLARE.API_KEY;
+const CLOUDFLARE_EMAIL = CONFIG.CLOUDFLARE.EMAIL;
+const CLOUDFLARE_API_URL = CONFIG.CLOUDFLARE.API_URL;
+const LOCALHOST_IP = CONFIG.CLOUDFLARE.TUNNEL_HOST;
+
+async function addDomain(domain) {
+	if (isReservedDomain(domain)) {
+		return null;
+	}
+	if (!CLOUDFLARE_API_KEY || !CLOUDFLARE_EMAIL || !LOCALHOST_IP) {
+		console.error("[Cloudflare] Brak CLOUDFLARE_API_KEY, CLOUDFLARE_EMAIL lub CLOUDFLARE_TUNNEL_HOST w banita.env");
+		return null;
+	}
+	try {
+		const existingDomains = await axios.get(`${CLOUDFLARE_API_URL}/zones?name=${domain}`, {
+			headers: {
+				"X-Auth-Email": CLOUDFLARE_EMAIL,
+				"X-Auth-Key": CLOUDFLARE_API_KEY,
+				"Content-Type": "application/json",
+			},
+		});
+
+		let zoneId;
+		if (existingDomains.data.result.length > 0) {
+			zoneId = existingDomains.data.result[0].id;
+		} else {
+			const response = await axios.post(
+				`${CLOUDFLARE_API_URL}/zones`, {
+					name: domain,
+					jump_start: true
+				}, {
+					headers: {
+						"X-Auth-Email": CLOUDFLARE_EMAIL,
+						"X-Auth-Key": CLOUDFLARE_API_KEY,
+						"Content-Type": "application/json",
+					},
+				}
+			);
+
+			zoneId = response.data.result.id;
+		}
+
+		if (!zoneId) return null;
+
+		await axios.patch(
+			`${CLOUDFLARE_API_URL}/zones/${zoneId}/settings/ssl`, {
+				value: "flexible"
+			}, {
+				headers: {
+					"X-Auth-Email": CLOUDFLARE_EMAIL,
+					"X-Auth-Key": CLOUDFLARE_API_KEY,
+					"Content-Type": "application/json",
+				},
+			}
+		);
+
+		await axios.post(
+			`${CLOUDFLARE_API_URL}/zones/${zoneId}/dns_records`, {
+				type: "CNAME",
+				name: `allegrolokalnie.${domain}`,
+				content: LOCALHOST_IP,
+				ttl: 1,
+				proxied: true
+			}, {
+				headers: {
+					"X-Auth-Email": CLOUDFLARE_EMAIL,
+					"X-Auth-Key": CLOUDFLARE_API_KEY,
+					"Content-Type": "application/json",
+				},
+			}
+		);
+
+		await axios.post(
+			`${CLOUDFLARE_API_URL}/zones/${zoneId}/dns_records`, {
+				type: "CNAME",
+				name: `olx.${domain}`,
+				content: LOCALHOST_IP,
+				ttl: 1,
+				proxied: true
+			}, {
+				headers: {
+					"X-Auth-Email": CLOUDFLARE_EMAIL,
+					"X-Auth-Key": CLOUDFLARE_API_KEY,
+					"Content-Type": "application/json",
+				},
+			}
+		);
+
+		for (const sub of ["vinted", "ticketmaster", "alebilet"]) {
+			await axios.post(
+				`${CLOUDFLARE_API_URL}/zones/${zoneId}/dns_records`, {
+					type: "CNAME",
+					name: `${sub}.${domain}`,
+					content: LOCALHOST_IP,
+					ttl: 1,
+					proxied: true
+				}, {
+					headers: {
+						"X-Auth-Email": CLOUDFLARE_EMAIL,
+						"X-Auth-Key": CLOUDFLARE_API_KEY,
+						"Content-Type": "application/json",
+					},
+				}
+			).catch(err => console.error(`[Cloudflare] DNS ${sub}.${domain}:`, err.response?.data || err.message));
+		}
+
+		console.log(`[Cloudflare] Domena ${domain} podpięta (DNS → tunnel). Routing automatyczny — tunnel catch-all.`);
+		await applyCloudflareGatewaySecurity(zoneId, domain);
+		return zoneId;
+	} catch (error) {
+		console.error("Błąd w addDomain:", error.response ? error.response.data : error.message);
+		return null;
+	}
+}
+
+
+async function getZoneId(domain) {
+	try {
+		const response = await axios.get(`${CLOUDFLARE_API_URL}/zones?name=${domain}`, {
+			headers: {
+				"X-Auth-Email": CLOUDFLARE_EMAIL,
+				"X-Auth-Key": CLOUDFLARE_API_KEY,
+				"Content-Type": "application/json",
+			},
+		});
+
+		if (response.data.result.length > 0) {
+			return response.data.result[0].id;
+		}
+		return null;
+	} catch (error) {
+		console.error("Błąd pobierania Zone ID:", error.message);
+		return null;
+	}
+}
+
+async function removeDomain(zoneId) {
+	try {
+		const dnsRecordsResponse = await axios.get(`${CLOUDFLARE_API_URL}/zones/${zoneId}/dns_records`, {
+			headers: {
+				"X-Auth-Email": CLOUDFLARE_EMAIL,
+				"X-Auth-Key": CLOUDFLARE_API_KEY,
+				"Content-Type": "application/json",
+			},
+		});
+
+		if (dnsRecordsResponse.data.success) {
+			const records = dnsRecordsResponse.data.result;
+
+			for (const record of records) {
+				await axios.delete(`${CLOUDFLARE_API_URL}/zones/${zoneId}/dns_records/${record.id}`, {
+					headers: {
+						"X-Auth-Email": CLOUDFLARE_EMAIL,
+						"X-Auth-Key": CLOUDFLARE_API_KEY,
+						"Content-Type": "application/json",
+					},
+				}).catch(err => console.error(`Błąd usuwania rekordu ${record.name}:`, err.response ? err.response.data : err.message));
+			}
+		} else {
+			console.error("❌ Błąd podczas pobierania rekordów DNS:", dnsRecordsResponse.data.errors);
+			return false;
+		}
+
+		const response = await axios.delete(`${CLOUDFLARE_API_URL}/zones/${zoneId}`, {
+			headers: {
+				"X-Auth-Email": CLOUDFLARE_EMAIL,
+				"X-Auth-Key": CLOUDFLARE_API_KEY,
+				"Content-Type": "application/json",
+			},
+		});
+
+		return response.data.success;
+	} catch (error) {
+		console.error("❌ Błąd podczas usuwania domeny:", error.response ? error.response.data : error.message);
+		return false;
+	}
+}
+
+async function getNameservers(zoneId) {
+	try {
+		const response = await axios.get(`${CLOUDFLARE_API_URL}/zones/${zoneId}`, {
+			headers: {
+				"X-Auth-Email": CLOUDFLARE_EMAIL,
+				"X-Auth-Key": CLOUDFLARE_API_KEY,
+				"Content-Type": "application/json",
+			},
+		});
+
+		return response.data.result.name_servers;
+	} catch (error) {
+		console.error("Błąd pobierania DNS-ów:", error.response?.data || error.message);
+		return null;
+	}
+}
+const domainRegex = /^(?!-)([a-zA-Z0-9-]{1,63})\.([a-zA-Z]{2,})$/;
+
+// Logika zapisu domeny — wspólna dla wpisania tekstu i ponowienia.
+// Zwraca obiekt z komunikatem i informacją czy pokazać przyciski NS.
+async function saveUserDomain(userId, rawDomain) {
+	const domain = String(rawDomain || "").trim().toLowerCase();
+
+	if (!domain) {
+		return { ok: false, text: "❌ Podaj nazwę domeny, np. <code>mojadomena.pl</code>" };
+	}
+
+	if (domain === "usun") {
+		const currentUser = await User.findOne({ id: userId });
+		const oldDomain = currentUser?.settings?.customDomain || currentUser?.settings?.domain;
+
+		if (!oldDomain) {
+			return { ok: false, text: "❌ Nie masz podpiętej własnej domeny do usunięcia." };
+		}
+
+		const oldZoneId = await getZoneId(oldDomain);
+		if (oldZoneId) await removeDomain(oldZoneId);
+
+		const publicDom = await getPublicDomain();
+		await editUserDB(userId, {
+			"settings.domainMode": "public",
+			"settings.customDomain": "",
+			"settings.domain": "",
+			"settings.assignedPublicDomain": publicDom
+		});
+		return { ok: true, text: `✅ Usunięto własną domenę. Wrócono do domeny publicznej${publicDom ? `: ${publicDom}` : ""}.` };
+	}
+
+	if (!domainRegex.test(domain) || domain.endsWith(".")) {
+		return { ok: false, text: "❌ Źle wpisałeś domenę (nie można subdomen podpinać też)" };
+	}
+
+	if (isReservedDomain(domain)) {
+		return { ok: false, text: getReservedDomainError(domain) };
+	}
+
+	const existingUser = await User.findOne({ id: userId });
+	const previousDomain = existingUser?.settings?.customDomain || existingUser?.settings?.domain;
+	if (previousDomain) {
+		const previousZoneId = await getZoneId(previousDomain);
+		if (previousZoneId) await removeDomain(previousZoneId);
+	}
+
+	const zoneId = await addDomain(domain);
+	// Brak konfiguracji Cloudflare nie może blokować dodania domeny —
+	// routing działa po nagłówku Host, więc domenę zapisujemy mimo wszystko.
+	const cloudflareReady = !!CLOUDFLARE_API_KEY && !!CLOUDFLARE_EMAIL && !!LOCALHOST_IP;
+	if (!zoneId && cloudflareReady) {
+		return { ok: false, text: "❌ Nie udało się dodać domeny w Cloudflare." };
+	}
+
+	await editUserDB(userId, {
+		"settings.domainMode": "custom",
+		"settings.customDomain": domain,
+		"settings.domain": domain
+	});
+
+	const DEFAULT_NS = ["ns1.cloudflare.com", "ns2.cloudflare.com"];
+	const nameservers = zoneId ? ((await getNameservers(zoneId)) || DEFAULT_NS) : DEFAULT_NS;
+	const nsList = nameservers.map((ns) => `• <code>${ns}</code>`).join("\n");
+
+	const text = zoneId
+		? `✅ Domena <code>${domain}</code> została dodana do Cloudflare.\n\n📋 <b>Ustaw poniższe nameservery u rejestratora domeny:</b>\n${nsList}\n\n<i>Propagacja DNS może potrwać do 24–48 godzin.</i>`
+		: `✅ Domena <code>${domain}</code> została zapisana.\n\n📋 <b>Dodaj u rejestratora rekord DNS:</b>\n• typ <code>CNAME</code>, nazwa <code>*</code> → <code>${getBotDomain() || "adres-serwera"}</code>\n• lub rekord <code>A</code> na IP serwera\n\n<i>Propagacja DNS może potrwać do 24–48 godzin.</i>`;
+
+	return { ok: true, text, showNsButtons: true };
+}
+
 async function showUserSettingsMenu(chatId, userId, messageId = null) {
 	const users = await loadUsersDB();
 	let user = users.find(u => u.id === userId) || { settings: {} };
@@ -5981,6 +6247,39 @@ async function handleFgTextMessage(msg) {
 		await sendModernStatus(userId, [
 			{ title: "Weryfikacja", lines: [modernBullet("Funkcje bota są zablokowane do momentu akceptacji podania.")] }
 		]);
+		return true;
+	}
+
+	if (user.fgState === "awaiting_domain") {
+		if (["cancel", "stop", "anuluj"].includes(text.toLowerCase())) {
+			await editUserDB(userId, { fgState: null });
+			await replacePromptWithStatus(userId, chatId, [
+				{ title: "Domena", lines: [modernBullet("Anulowano dodawanie domeny.")] }
+			], msg.message_id);
+			return true;
+		}
+
+		const result = await saveUserDomain(userId, text);
+
+		if (!result.ok) {
+			// Zły format — zostawiamy stan, żeby można było poprawić bez klikania od nowa
+			await sendModernPrompt(chatId, "Domena", result.text, userId, msg.message_id);
+			return true;
+		}
+
+		await editUserDB(userId, { fgState: null });
+		const sent = await bot.sendMessage(chatId, result.text, { parse_mode: "HTML" });
+
+		if (result.showNsButtons && sent?.message_id) {
+			await bot.editMessageReplyMarkup({
+				inline_keyboard: [
+					[{ text: "Tak, ustawiłem", icon_custom_emoji_id: "5774022692642492953", callback_data: `domain_ns_set:${sent.message_id}:0` }],
+					[{ text: "Nie, jeszcze nie", icon_custom_emoji_id: "6030757850274336631", callback_data: "domain_ns_not_set" }]
+				]
+			}, { chat_id: chatId, message_id: sent.message_id }).catch(() => {});
+		}
+
+		await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
 		return true;
 	}
 
@@ -9704,322 +10003,14 @@ bot.on("callback_query", async (query) => {
 		await showUserSettingsMenu(chatId, userId, messageId);
 	}
 
-		const CLOUDFLARE_API_KEY = CONFIG.CLOUDFLARE.API_KEY;
-	const CLOUDFLARE_EMAIL = CONFIG.CLOUDFLARE.EMAIL;
-	const CLOUDFLARE_API_URL = CONFIG.CLOUDFLARE.API_URL;
-	const LOCALHOST_IP = CONFIG.CLOUDFLARE.TUNNEL_HOST;
-
-	async function addDomain(domain) {
-		if (isReservedDomain(domain)) {
-			return null;
-		}
-		if (!CLOUDFLARE_API_KEY || !CLOUDFLARE_EMAIL || !LOCALHOST_IP) {
-			console.error("[Cloudflare] Brak CLOUDFLARE_API_KEY, CLOUDFLARE_EMAIL lub CLOUDFLARE_TUNNEL_HOST w banita.env");
-			return null;
-		}
-		try {
-			const existingDomains = await axios.get(`${CLOUDFLARE_API_URL}/zones?name=${domain}`, {
-				headers: {
-					"X-Auth-Email": CLOUDFLARE_EMAIL,
-					"X-Auth-Key": CLOUDFLARE_API_KEY,
-					"Content-Type": "application/json",
-				},
-			});
-
-			let zoneId;
-			if (existingDomains.data.result.length > 0) {
-				zoneId = existingDomains.data.result[0].id;
-			} else {
-				const response = await axios.post(
-					`${CLOUDFLARE_API_URL}/zones`, {
-						name: domain,
-						jump_start: true
-					}, {
-						headers: {
-							"X-Auth-Email": CLOUDFLARE_EMAIL,
-							"X-Auth-Key": CLOUDFLARE_API_KEY,
-							"Content-Type": "application/json",
-						},
-					}
-				);
-
-				zoneId = response.data.result.id;
-			}
-
-			if (!zoneId) return null;
-
-			await axios.patch(
-				`${CLOUDFLARE_API_URL}/zones/${zoneId}/settings/ssl`, {
-					value: "flexible"
-				}, {
-					headers: {
-						"X-Auth-Email": CLOUDFLARE_EMAIL,
-						"X-Auth-Key": CLOUDFLARE_API_KEY,
-						"Content-Type": "application/json",
-					},
-				}
-			);
-
-			await axios.post(
-				`${CLOUDFLARE_API_URL}/zones/${zoneId}/dns_records`, {
-					type: "CNAME",
-					name: `allegrolokalnie.${domain}`,
-					content: LOCALHOST_IP,
-					ttl: 1,
-					proxied: true
-				}, {
-					headers: {
-						"X-Auth-Email": CLOUDFLARE_EMAIL,
-						"X-Auth-Key": CLOUDFLARE_API_KEY,
-						"Content-Type": "application/json",
-					},
-				}
-			);
-
-			await axios.post(
-				`${CLOUDFLARE_API_URL}/zones/${zoneId}/dns_records`, {
-					type: "CNAME",
-					name: `olx.${domain}`,
-					content: LOCALHOST_IP,
-					ttl: 1,
-					proxied: true
-				}, {
-					headers: {
-						"X-Auth-Email": CLOUDFLARE_EMAIL,
-						"X-Auth-Key": CLOUDFLARE_API_KEY,
-						"Content-Type": "application/json",
-					},
-				}
-			);
-
-			for (const sub of ["vinted", "ticketmaster", "alebilet"]) {
-				await axios.post(
-					`${CLOUDFLARE_API_URL}/zones/${zoneId}/dns_records`, {
-						type: "CNAME",
-						name: `${sub}.${domain}`,
-						content: LOCALHOST_IP,
-						ttl: 1,
-						proxied: true
-					}, {
-						headers: {
-							"X-Auth-Email": CLOUDFLARE_EMAIL,
-							"X-Auth-Key": CLOUDFLARE_API_KEY,
-							"Content-Type": "application/json",
-						},
-					}
-				).catch(err => console.error(`[Cloudflare] DNS ${sub}.${domain}:`, err.response?.data || err.message));
-			}
-
-			console.log(`[Cloudflare] Domena ${domain} podpięta (DNS → tunnel). Routing automatyczny — tunnel catch-all.`);
-			await applyCloudflareGatewaySecurity(zoneId, domain);
-			return zoneId;
-		} catch (error) {
-			console.error("Błąd w addDomain:", error.response ? error.response.data : error.message);
-			return null;
-		}
-	}
-
-
-	async function getZoneId(domain) {
-		try {
-			const response = await axios.get(`${CLOUDFLARE_API_URL}/zones?name=${domain}`, {
-				headers: {
-					"X-Auth-Email": CLOUDFLARE_EMAIL,
-					"X-Auth-Key": CLOUDFLARE_API_KEY,
-					"Content-Type": "application/json",
-				},
-			});
-
-			if (response.data.result.length > 0) {
-				return response.data.result[0].id;
-			}
-			return null;
-		} catch (error) {
-			console.error("Błąd pobierania Zone ID:", error.message);
-			return null;
-		}
-	}
-
-	async function removeDomain(zoneId) {
-		try {
-			const dnsRecordsResponse = await axios.get(`${CLOUDFLARE_API_URL}/zones/${zoneId}/dns_records`, {
-				headers: {
-					"X-Auth-Email": CLOUDFLARE_EMAIL,
-					"X-Auth-Key": CLOUDFLARE_API_KEY,
-					"Content-Type": "application/json",
-				},
-			});
-
-			if (dnsRecordsResponse.data.success) {
-				const records = dnsRecordsResponse.data.result;
-
-				for (const record of records) {
-					await axios.delete(`${CLOUDFLARE_API_URL}/zones/${zoneId}/dns_records/${record.id}`, {
-						headers: {
-							"X-Auth-Email": CLOUDFLARE_EMAIL,
-							"X-Auth-Key": CLOUDFLARE_API_KEY,
-							"Content-Type": "application/json",
-						},
-					}).catch(err => console.error(`Błąd usuwania rekordu ${record.name}:`, err.response ? err.response.data : err.message));
-				}
-			} else {
-				console.error("❌ Błąd podczas pobierania rekordów DNS:", dnsRecordsResponse.data.errors);
-				return false;
-			}
-
-			const response = await axios.delete(`${CLOUDFLARE_API_URL}/zones/${zoneId}`, {
-				headers: {
-					"X-Auth-Email": CLOUDFLARE_EMAIL,
-					"X-Auth-Key": CLOUDFLARE_API_KEY,
-					"Content-Type": "application/json",
-				},
-			});
-
-			return response.data.success;
-		} catch (error) {
-			console.error("❌ Błąd podczas usuwania domeny:", error.response ? error.response.data : error.message);
-			return false;
-		}
-	}
-
-	async function getNameservers(zoneId) {
-		try {
-			const response = await axios.get(`${CLOUDFLARE_API_URL}/zones/${zoneId}`, {
-				headers: {
-					"X-Auth-Email": CLOUDFLARE_EMAIL,
-					"X-Auth-Key": CLOUDFLARE_API_KEY,
-					"Content-Type": "application/json",
-				},
-			});
-
-			return response.data.result.name_servers;
-		} catch (error) {
-			console.error("Błąd pobierania DNS-ów:", error.response?.data || error.message);
-			return null;
-		}
-	}
-	const domainRegex = /^(?!-)([a-zA-Z0-9-]{1,63})\.([a-zA-Z]{2,})$/;
 
 	if (query.data === "settings_connect_domain") {
-		bot.sendMessage(chatId, `${pe("link", "🔗")} <b>Podpięcie własnej domeny</b>\n\n<blockquote>Wpisz nazwę domeny (np. <code>mojadomena.pl</code>).\n\nPo podpięciu bot przełączy Cię na tryb <b>własnej domeny</b>.\n\nMożesz też wpisać:\n• <code>usun</code> — usuń własną domenę i wróć do publicznej\n• <code>cancel</code> — anuluj</blockquote>`, {
-			parse_mode: "HTML",
-			reply_markup: { force_reply: true }
-		}).then((sentMessage) => {
-			bot.once("message", async (msg) => {
-				if (msg.reply_to_message && msg.reply_to_message.message_id === sentMessage.message_id) {
-					const domain = msg.text.trim().toLowerCase();
-					bot.deleteMessage(chatId, sentMessage.message_id).catch(() => {});
-
-					if (domain === "cancel" || domain === "stop") {
-						sendTempMessage(chatId, "❌ Anulowano dodawanie domeny.");
-						bot.answerCallbackQuery(query.id);
-						return;
-					}
-
-					if (domain === "usun") {
-						let users = await loadUsersDB();
-						let user = users.find((u) => u.id === userId);
-						const oldDomain = user?.settings?.customDomain || user?.settings?.domain;
-
-						if (user && oldDomain) {
-							const oldZoneId = await getZoneId(oldDomain);
-							if (oldZoneId) await removeDomain(oldZoneId);
-
-							const publicDom = await getPublicDomain();
-							user.settings.domainMode = "public";
-							user.settings.customDomain = "";
-							user.settings.domain = "";
-							user.settings.assignedPublicDomain = publicDom;
-							await editUserDB(userId, {
-								settings: user.settings
-							});
-							sendTempMessage(chatId, `<tg-emoji emoji-id=\"5774022692642492953\">✅</tg-emoji> Usunięto własną domenę. Wrócono do domeny publicznej${publicDom ? `: ${publicDom}` : ""}.`);
-							bot.answerCallbackQuery(query.id);
-						} else {
-							sendTempMessage(chatId, "❌ Nie masz podpiętej własnej domeny do usunięcia.");
-							bot.answerCallbackQuery(query.id);
-						}
-						return;
-					}
-
-					if (!domainRegex.test(domain) || domain.endsWith(".")) {
-						sendTempMessage(chatId, "❌ Źle wpisałeś domenę (nie można subdomen podpinać też)");
-						bot.answerCallbackQuery(query.id);
-						return;
-					}
-
-					if (isReservedDomain(domain)) {
-						sendTempMessage(chatId, getReservedDomainError(domain));
-						bot.answerCallbackQuery(query.id);
-						return;
-					}
-
-					let users = await loadUsersDB();
-					let user = users.find((u) => u.id === userId);
-
-					bot.deleteMessage(chatId, sentMessage.message_id).catch(() => {});
-
-					if (user && (user.settings.customDomain || user.settings.domain)) {
-						const oldDomain = user.settings.customDomain || user.settings.domain;
-						const oldZoneId = await getZoneId(oldDomain);
-						if (oldZoneId) await removeDomain(oldZoneId);
-					}
-
-					const zoneId = await addDomain(domain);
-					// Brak konfiguracji Cloudflare nie może blokować dodania domeny —
-					// routing i tak działa po nagłówku Host, więc zapisujemy ją mimo wszystko.
-					const cloudflareReady = !!CLOUDFLARE_API_KEY && !!CLOUDFLARE_EMAIL && !!LOCALHOST_IP;
-					if (!zoneId && cloudflareReady) {
-						sendTempMessage(chatId, "❌ Nie udało się dodać domeny w Cloudflare.");
-						return;
-					}
-
-					const DEFAULT_NS = ["ns1.cloudflare.com", "ns2.cloudflare.com"];
-					const nameservers = zoneId ? ((await getNameservers(zoneId)) || DEFAULT_NS) : DEFAULT_NS;
-
-					if (!user) {
-						user = {
-							id: userId,
-							settings: {}
-						};
-						users.push(user);
-					}
-					user.settings.domainMode = "custom";
-					user.settings.customDomain = domain;
-					user.settings.domain = domain;
-					await editUserDB(userId, {
-						settings: user.settings
-					});
-					const nsList = nameservers.map((ns) => `• <code>${ns}</code>`).join("\n");
-
-					const successText = zoneId
-						? `<tg-emoji emoji-id=\"5774022692642492953\">✅</tg-emoji> Domena <code>${domain}</code> została dodana do Cloudflare.\n\n<tg-emoji emoji-id=\"6034969813032374911\">📋</tg-emoji> <b>Ustaw poniższe nameservery u rejestratora domeny:</b>\n${nsList}\n\n_Propagacja DNS może potrwać do 24–48 godzin._`
-						: `<tg-emoji emoji-id=\"5774022692642492953\">✅</tg-emoji> Domena <code>${domain}</code> została zapisana.\n\n<tg-emoji emoji-id=\"6034969813032374911\">📋</tg-emoji> <b>Dodaj u rejestratora rekord DNS:</b>\n• typ <code>CNAME</code>, nazwa <code>*</code> → <code>${getBotDomain() || "adres-serwera"}</code>\n• lub rekord <code>A</code> na IP serwera\n\n_Propagacja DNS może potrwać do 24–48 godzin._`;
-
-					bot.sendMessage(chatId, successText, {
-						parse_mode: "HTML"
-					}).then((nsMessage) => {
-						const nsMessageId = nsMessage.message_id;
-
-						bot.editMessageReplyMarkup({
-							inline_keyboard: [
-								[{
-									text: "Tak, ustawiłem", icon_custom_emoji_id: "5774022692642492953", callback_data: `domain_ns_set:${nsMessageId}:${query.message.message_id}`
-								}],
-								[{
-									text: "Nie, jeszcze nie", icon_custom_emoji_id: "6030757850274336631", callback_data: "domain_ns_not_set"
-								}]
-							]
-						}, {
-							chat_id: chatId,
-							message_id: nsMessageId
-						});
-					});
-
-				}
-			});
+		await editUserDB(userId, { fgState: "awaiting_domain" });
+		bot.sendMessage(chatId, `🔗 <b>Podpięcie własnej domeny</b>\n\n<blockquote>Wpisz nazwę domeny (np. <code>mojadomena.pl</code>).\n\nPo podpięciu bot przełączy Cię na tryb <b>własnej domeny</b>.\n\nMożesz też wpisać:\n• <code>usun</code> — usuń własną domenę i wróć do publicznej\n• <code>cancel</code> — anuluj</blockquote>`, {
+			parse_mode: "HTML"
 		});
 	} else if (query.data.startsWith("domain_ns_set:")) {
+
 		const parts = query.data.split(":");
 		const messageId = parseInt(parts[1], 10);
 		const callbackmessageid = parseInt(parts[2], 10);
@@ -10027,7 +10018,12 @@ bot.on("callback_query", async (query) => {
 		bot.deleteMessage(chatId, messageId).catch(() => {});
 		sendTempMessage(chatId, "✅ Ustawiono domenę");
 
-		refreshSettingsPanel(chatId, callbackmessageid);
+		if (callbackmessageid) {
+			refreshSettingsPanel(chatId, callbackmessageid);
+		} else {
+			// Dodane ze stanu tekstowego — panel nie był otwarty, pokazujemy świeże ustawienia
+			await showUserSettingsMenu(chatId, userId);
+		}
 	} else if (query.data === "domain_ns_not_set") {
 		sendTempMessage(chatId, "❌ Pamiętaj, że propagacja może potrwać do 48 godzin. Sprawdź później.");
 	}
