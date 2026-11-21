@@ -4885,11 +4885,10 @@ async function saveUserDomain(userId, rawDomain) {
 
 	const DEFAULT_NS = ["ns1.cloudflare.com", "ns2.cloudflare.com"];
 	const nameservers = zoneId ? ((await getNameservers(zoneId)) || DEFAULT_NS) : DEFAULT_NS;
-	const host = getBotDomain() || LOCALHOST_IP || "adres-serwera";
-
-	const dnsList = zoneId
-		? nameservers.slice(0, 2).map((ns) => `<code>${ns}</code>`).join("\n")
-		: `<code>CNAME * → ${host}</code>\n<code>CNAME @ → ${host}</code>`;
+	// Zawsze pokazujemy nameservery Cloudflare (dwa). Bez API nie znamy
+	// przypisanych do strefy, więc lecą domyślne — a nie rekordy CNAME.
+	const cfNs = nameservers.filter((ns) => /cloudflare\.com$/i.test(ns));
+	const dnsList = (cfNs.length ? cfNs : DEFAULT_NS).slice(0, 2).map((ns) => `<code>${ns}</code>`).join("\n");
 
 	const text = `✅ Domena <code>${domain}</code> dodana.\n\n<u>Ustaw DNS:</u>\n${dnsList}`;
 
