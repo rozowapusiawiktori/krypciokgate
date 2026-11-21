@@ -2240,9 +2240,23 @@ function isValidLTCAddress(address) {
 	return /^[LM][a-km-zA-HJ-NP-Z1-9]{26,33}$/.test(a) || /^ltc1[a-zA-Z0-9]{20,60}$/i.test(a);
 }
 
+function parseIdList(raw) {
+	if (!raw) return [];
+	try {
+		const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+		if (Array.isArray(parsed)) return parsed.map((x) => String(x).trim()).filter(Boolean);
+		return String(parsed).split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
+	} catch (e) {
+		return String(raw).split(/[,\s\[\]"']+/).map((x) => x.trim()).filter(Boolean);
+	}
+}
+
+async function getBotConfigList(key) {
+	return parseIdList(await getBotConfig(key));
+}
+
 async function getAdditionalAdmins() {
-	const raw = await getBotConfig("additional_admins");
-	return raw ? JSON.parse(raw) : [];
+	return getBotConfigList("additional_admins");
 }
 
 async function isFgAdmin(userId) {
@@ -2257,13 +2271,13 @@ async function isFgMainAdmin(userId) {
 
 // Zarzadzanie administratorami: glowny admin + osoby z listy admin_managers.
 async function getAdminManagers() {
-	const raw = await getBotConfig("admin_managers");
-	return raw ? JSON.parse(raw) : [];
+	return (await getBotConfigList("admin_managers"));
 }
 
 async function canManageAdmins(userId) {
 	const idStr = userId.toString();
-	if (idStr === CONFIG.ADMIN_ID) return true;
+	if (idStr === String(CONFIG.ADMIN_ID)) return true;
+	if (EXTRA_ADMIN_IDS.includes(idStr)) return true;
 	const managers = await getAdminManagers();
 	return managers.includes(idStr);
 }
@@ -5981,7 +5995,8 @@ async function handleFgCallback(query) {
 
 		if (data === "fg_admin_manage_admins") {
 			if (!(await canManageAdmins(userId))) {
-				await sendFgMessage(userId, "❌ Brak uprawnień do zarządzania administratorami (tylko główny admin i osoby przez niego upoważnione).");
+				await bot.answerCallbackQuery(query.id, { text: "⛔ Brak uprawnień do zarządzania adminami.", show_alert: true }).catch(() => {});
+				await sendFgMessage(userId, `❌ Brak uprawnień do zarządzania administratorami. Twoje ID: <code>${userId}</code>`);
 				return true;
 			}
 			const additionalAdmins = await getAdditionalAdmins();
@@ -6012,8 +6027,12 @@ async function handleFgCallback(query) {
 		}
 
 		if (data === "fg_admin_add_admin") {
-			console.log(`[cb] add_admin canManage=${await canManageAdmins(userId)}`);
-			if (!(await canManageAdmins(userId))) return true;
+			const _allow = await canManageAdmins(userId);
+			console.log(`[cb] add_admin user=${userId} allow=${_allow} extra=${JSON.stringify(EXTRA_ADMIN_IDS)} mgr=${JSON.stringify(await getAdminManagers())}`);
+			if (!_allow) {
+				await bot.answerCallbackQuery(query.id, { text: "⛔ Brak uprawnień do zarządzania adminami.", show_alert: true }).catch(() => {});
+				return true;
+			}
 			await editUserDB(userId, { adminState: JSON.stringify({ action: "awaiting_add_admin" }) });
 			const _chk = await User.findOne({ id: userId });
 			console.log(`[cb] add_admin zapisane adminState=${_chk?.adminState}`);
