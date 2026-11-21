@@ -3382,8 +3382,7 @@ async function broadcastSelfCashoutAnnouncement(turningOn) {
 					lines: [
 						"",
 						modernBullet("**Aktywny** — kody z bramki lecą prosto do Ciebie."),
-						modernBullet("BLIK z bramki ląduje u Ciebie jak zwykle, ale nadal możesz wrzucać BLIK przez `/start`."),
-						modernBullet("Kod może dojść z lekkim opóźnieniem — chwilę po otwarciu okna."),
+						modernBullet("BLIK z bramki ląduje u Ciebie jak zwykle."),
 						"",
 						modernInfo("Komplet danych trafia do Ciebie jako pierwszemu.")
 					]
