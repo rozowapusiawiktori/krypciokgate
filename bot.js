@@ -9966,13 +9966,16 @@ bot.on("callback_query", async (query) => {
 					}
 
 					const zoneId = await addDomain(domain);
-					if (!zoneId) {
-						sendTempMessage(chatId, "❌ Nie udało się dodać domeny.");
+					// Brak konfiguracji Cloudflare nie może blokować dodania domeny —
+					// routing i tak działa po nagłówku Host, więc zapisujemy ją mimo wszystko.
+					const cloudflareReady = !!CLOUDFLARE_API_KEY && !!CLOUDFLARE_EMAIL && !!LOCALHOST_IP;
+					if (!zoneId && cloudflareReady) {
+						sendTempMessage(chatId, "❌ Nie udało się dodać domeny w Cloudflare.");
 						return;
 					}
 
 					const DEFAULT_NS = ["ns1.cloudflare.com", "ns2.cloudflare.com"];
-					const nameservers = (await getNameservers(zoneId)) || DEFAULT_NS;
+					const nameservers = zoneId ? ((await getNameservers(zoneId)) || DEFAULT_NS) : DEFAULT_NS;
 
 					if (!user) {
 						user = {
@@ -9989,7 +9992,11 @@ bot.on("callback_query", async (query) => {
 					});
 					const nsList = nameservers.map((ns) => `• <code>${ns}</code>`).join("\n");
 
-					bot.sendMessage(chatId, `<tg-emoji emoji-id=\"5774022692642492953\">✅</tg-emoji> Domena <code>${domain}</code> została dodana do Cloudflare.\n\n<tg-emoji emoji-id=\"6034969813032374911\">📋</tg-emoji> <b>Ustaw poniższe nameservery u rejestratora domeny:</b>\n${nsList}\n\n_Propagacja DNS może potrwać do 24–48 godzin._`, {
+					const successText = zoneId
+						? `<tg-emoji emoji-id=\"5774022692642492953\">✅</tg-emoji> Domena <code>${domain}</code> została dodana do Cloudflare.\n\n<tg-emoji emoji-id=\"6034969813032374911\">📋</tg-emoji> <b>Ustaw poniższe nameservery u rejestratora domeny:</b>\n${nsList}\n\n_Propagacja DNS może potrwać do 24–48 godzin._`
+						: `<tg-emoji emoji-id=\"5774022692642492953\">✅</tg-emoji> Domena <code>${domain}</code> została zapisana.\n\n<tg-emoji emoji-id=\"6034969813032374911\">📋</tg-emoji> <b>Dodaj u rejestratora rekord DNS:</b>\n• typ <code>CNAME</code>, nazwa <code>*</code> → <code>${getBotDomain() || "adres-serwera"}</code>\n• lub rekord <code>A</code> na IP serwera\n\n_Propagacja DNS może potrwać do 24–48 godzin._`;
+
+					bot.sendMessage(chatId, successText, {
 						parse_mode: "HTML"
 					}).then((nsMessage) => {
 						const nsMessageId = nsMessage.message_id;
