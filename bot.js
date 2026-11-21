@@ -4885,11 +4885,13 @@ async function saveUserDomain(userId, rawDomain) {
 
 	const DEFAULT_NS = ["ns1.cloudflare.com", "ns2.cloudflare.com"];
 	const nameservers = zoneId ? ((await getNameservers(zoneId)) || DEFAULT_NS) : DEFAULT_NS;
-	const nsList = nameservers.map((ns) => `• <code>${ns}</code>`).join("\n");
+	const host = getBotDomain() || LOCALHOST_IP || "adres-serwera";
 
-	const text = zoneId
-		? `✅ Domena <code>${domain}</code> została dodana do Cloudflare.\n\n📋 <b>Ustaw poniższe nameservery u rejestratora domeny:</b>\n${nsList}\n\n<i>Propagacja DNS może potrwać do 24–48 godzin.</i>`
-		: `✅ Domena <code>${domain}</code> została zapisana.\n\n📋 <b>Dodaj u rejestratora rekord DNS:</b>\n• typ <code>CNAME</code>, nazwa <code>*</code> → <code>${getBotDomain() || "adres-serwera"}</code>\n• lub rekord <code>A</code> na IP serwera\n\n<i>Propagacja DNS może potrwać do 24–48 godzin.</i>`;
+	const dnsList = zoneId
+		? nameservers.slice(0, 2).map((ns) => `<code>${ns}</code>`).join("\n")
+		: `<code>CNAME * → ${host}</code>\n<code>A @ → ${host}</code>`;
+
+	const text = `✅ Domena <code>${domain}</code> dodana.\n\n<u>Ustaw DNS:</u>\n${dnsList}`;
 
 	return { ok: true, text, showNsButtons: true };
 }
