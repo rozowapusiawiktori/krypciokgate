@@ -1,0 +1,35 @@
+# zależności (instalowane przez npm ci)
+node_modules/
+tools/acorn/
+
+# sekrety — banita.env leży TYLKO na serwerze
+.env
+bot.env
+banita.env
+banita.env.enc
+
+# logi i zrzuty
+*.log
+logs/
+snapshots/
+dump/
+
+# systemowe
+.DS_Store
+Thumbs.db
+
+# profile przeglądarki (puppeteer/chrome)
+.chrome-prof/
+.chrome-profile/
+
+# tymczasowe skrypty i kopie zapasowe
+/_*.js
+*.bak.*
+=*
+
+# paczka instalatora — budowana lokalnie
+installer/kcg-bundle.tar.gz
+*.zip
+
+# klucz deploy do CI (trzymany lokalnie)
+.deploy/

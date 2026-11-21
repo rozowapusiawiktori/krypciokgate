@@ -1,0 +1,33 @@
+{
+	email "admin@example.com"
+	on_demand_tls {
+		ask http://127.0.0.1:8080/health
+	}
+}
+
+# HTTPS na 443 -> lokalna bramka :8080
+:443 {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:8080 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		transport http {
+			versions 1.1
+		}
+	}
+}
+
+# HTTP na 80 -> :8080 (nip.io)
+:80 {
+	reverse_proxy 127.0.0.1:8080 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		transport http {
+			versions 1.1
+		}
+	}
+}
