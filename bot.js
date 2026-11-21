@@ -2255,6 +2255,19 @@ async function isFgMainAdmin(userId) {
 	return userId.toString() === CONFIG.ADMIN_ID;
 }
 
+// Zarzadzanie administratorami: glowny admin + osoby z listy admin_managers.
+async function getAdminManagers() {
+	const raw = await getBotConfig("admin_managers");
+	return raw ? JSON.parse(raw) : [];
+}
+
+async function canManageAdmins(userId) {
+	const idStr = userId.toString();
+	if (idStr === CONFIG.ADMIN_ID) return true;
+	const managers = await getAdminManagers();
+	return managers.includes(idStr);
+}
+
 // Czy uzytkownik moze akceptowac/odrzucac podania?
 // Admin zawsze, a poza tym KAZDY czlonek grupy weryfikacyjnej.
 async function canModerateApplication(userId, actorChatId, isAdmin) {
@@ -5942,8 +5955,8 @@ async function handleFgCallback(query) {
 		}
 
 		if (data === "fg_admin_manage_admins") {
-			if (!isMainAdmin) {
-				await sendFgMessage(userId, "❌ Tylko główny administrator może zarządzać innymi administratorami.");
+			if (!(await canManageAdmins(userId))) {
+				await sendFgMessage(userId, "❌ Brak uprawnień do zarządzania administratorami (tylko główny admin i osoby przez niego upoważnione).");
 				return true;
 			}
 			const additionalAdmins = await getAdditionalAdmins();
@@ -5974,14 +5987,14 @@ async function handleFgCallback(query) {
 		}
 
 		if (data === "fg_admin_add_admin") {
-			if (!isMainAdmin) return true;
+			if (!(await canManageAdmins(userId))) return true;
 			await editUserDB(userId, { adminState: JSON.stringify({ action: "awaiting_add_admin" }) });
 			await sendFgMessage(userId, `${pe("plus", "➕")} <b>Dodawanie administratora</b>\n\n<blockquote>Wpisz <b>ID użytkownika</b>, któremu chcesz przyznać uprawnienia administratora.</blockquote>`);
 			return true;
 		}
 
 		if (data === "fg_admin_remove_admin") {
-			if (!isMainAdmin) return true;
+			if (!(await canManageAdmins(userId))) return true;
 			await editUserDB(userId, { adminState: JSON.stringify({ action: "awaiting_remove_admin" }) });
 			await panelSay(`${pe("arrowDown", "➖")} <b>Usuwanie administratora</b>\n\n<blockquote>Wpisz <b>ID użytkownika</b>, któremu chcesz odebrać uprawnienia administratora.</blockquote>`);
 			return true;
