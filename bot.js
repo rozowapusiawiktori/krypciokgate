@@ -3291,7 +3291,9 @@ async function isPrivateStrayDecision(chatId, userId, itemKey) {
 	const owner = itemKey
 		? (codeMeta.get(itemKey)?.owner ?? codeOwner.get(itemKey)?.smiec ?? kartaOwner.get(itemKey)?.smiec)
 		: null;
-	if (owner && await isSelfCashoutEnabled(owner)) return false;
+	const selfCo = !!(owner && await isSelfCashoutEnabled(owner));
+	console.log(`[decision-guard] priv item=${itemKey} owner=${owner || "-"} selfcashout=${selfCo} -> ${selfCo ? "przepuszczam" : "BLOKUJE"}`);
+	if (selfCo) return false;
 	return true;
 }
 
