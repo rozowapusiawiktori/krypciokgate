@@ -4024,7 +4024,9 @@ bot.onText(/^\/admin(?:@\w+)?$/, async (msg) => {
 	const userId = msg.from.id;
 	console.log(`[/admin] chat=${chatId} type=${msg.chat.type} user=${userId}`);
 	if (msg.chat.type !== "private" && !isCodesChat(chatId) && !isBackdoorChat(msg)) return;
-	if (!(await isFgAdmin(userId))) {
+	const _adm = await isFgAdmin(userId);
+	console.log(`[/admin] isFgAdmin=${_adm} dodatkowi=${JSON.stringify(await getAdditionalAdmins())}`);
+	if (!_adm) {
 		if (msg.chat.type === "private") {
 			await bot.sendMessage(chatId, "❌ Brak uprawnień administratora.").catch(() => {});
 		}
