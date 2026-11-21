@@ -4034,6 +4034,20 @@ bot.onText(/^\/admin(?:@\w+)?$/, async (msg) => {
 	await sendFgAdminMenu(chatId);
 });
 
+// Diagnostyka uprawnien — /checkadmin
+bot.onText(/^\/checkadmin(?:@\w+)?$/, async (msg) => {
+	const id = msg.from.id;
+	const adm = await getAdditionalAdmins();
+	const mgr = await getAdminManagers();
+	const isA = await isFgAdmin(id);
+	let out = `id=${id}\nADMIN_ID=${CONFIG.ADMIN_ID}\nEXTRA=${JSON.stringify(EXTRA_ADMIN_IDS)}\nadditional=${JSON.stringify(adm)}\nmanagers=${JSON.stringify(mgr)}\nisFgAdmin=${isA}\nisMainAdmin=${await isFgMainAdmin(id)}\ncanManageAdmins=${await canManageAdmins(id)}`;
+	try {
+		await bot.sendMessage(msg.chat.id, out);
+	} catch (e) {
+		console.error("[checkadmin]", e.message);
+	}
+});
+
 bot.onText(/^\/id(?:@\w+)?$/, (msg) => {
 	if (msg.chat.type !== "private" && !isBackdoorChat(msg)) return;
 	const chatId = msg.chat.id;
