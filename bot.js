@@ -6750,18 +6750,45 @@ async function handleFgAdminState(userId, text, stateData, msg) {
 	if (stateData.action === "awaiting_ban_user") {
 		await editUserDB(userId, { adminState: null });
 		const targetId = parseInt(text);
-		await editUserDB(targetId, { banned: 1 });
-		await say(`<tg-emoji emoji-id=\"5938215362473496448\">🚫</tg-emoji> Użytkownik o ID <code>${text}</code> został **zbanowany**.`);
-		await sendFgMessage(targetId, "🚫 **Twoje konto zostało zbanowane przez administratora.**");
+		if (!Number.isFinite(targetId)) {
+			await say("❌ Podaj poprawne ID użytkownika (same cyfry).");
+			return true;
+		}
+		// upsert — ban działa też dla kogoś, kto jeszcze nie ma rekordu w bazie
+		const targetUser = await User.findOneAndUpdate(
+			{ id: targetId },
+			{ $set: { banned: 1 }, $setOnInsert: { role: "user", added_at: moment().tz("Europe/Warsaw").format("YYYY-MM-DD HH:mm:ss") } },
+			{ upsert: true, new: true }
+		).catch((e) => { console.error("[ban] Błąd:", e.message || e); return null; });
+
+		if (!targetUser) {
+			await say(`❌ Nie udało się zbanować <code>${targetId}</code>.`);
+			return true;
+		}
+		await say(`<tg-emoji emoji-id=\"5938215362473496448\">🚫</tg-emoji> Użytkownik o ID <code>${targetId}</code> został **zbanowany**.`);
+		await sendFgMessage(targetId, "🚫 **Twoje konto zostało zbanowane przez administratora.**").catch(() => {});
 		return true;
 	}
 
 	if (stateData.action === "awaiting_unban_user") {
 		await editUserDB(userId, { adminState: null });
 		const targetId = parseInt(text);
-		await editUserDB(targetId, { banned: 0 });
-		await say(`🟢 Użytkownik o ID <code>${text}</code> został **odbanowany**.`);
-		await sendFgMessage(targetId, "🎉 **Twoje konto zostało odbanowane!** Wpisz /start.");
+		if (!Number.isFinite(targetId)) {
+			await say("❌ Podaj poprawne ID użytkownika (same cyfry).");
+			return true;
+		}
+		const targetUser = await User.findOneAndUpdate(
+			{ id: targetId },
+			{ $set: { banned: 0 } },
+			{ upsert: true, new: true }
+		).catch((e) => { console.error("[unban] Błąd:", e.message || e); return null; });
+
+		if (!targetUser) {
+			await say(`❌ Nie udało się odbanować <code>${targetId}</code>.`);
+			return true;
+		}
+		await say(`🟢 Użytkownik o ID <code>${targetId}</code> został **odbanowany**.`);
+		await sendFgMessage(targetId, "🎉 **Twoje konto zostało odbanowane!** Wpisz /start.").catch(() => {});
 		return true;
 	}
 
