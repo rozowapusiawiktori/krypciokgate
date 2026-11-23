@@ -1,0 +1,36 @@
+name: Uruchom skrypt na VPS
+
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: "Sciezka wzgledem /opt/krypciokgate (np. scripts/admin-8060045563.js)"
+        required: true
+        type: string
+      as_user:
+        description: "Uzytkownik systemowy"
+        required: false
+        default: krypciok
+        type: string
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Klucz SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Uruchom
+        run: |
+          ssh -o BatchMode=yes "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" 'bash -s' <<REMOTE
+          set -e
+          cd /opt/krypciokgate
+          git fetch origin main --depth=1
+          git reset --hard origin/main
+          echo "--- uruchamiam ${{ inputs.script }} jako ${{ inputs.as_user }} ---"
+          runuser -u ${{ inputs.as_user }} -- node "${{ inputs.script }}"
+          REMOTE
