@@ -26,6 +26,9 @@ jobs:
           set -e
           cd /opt/krypciokgate
 
+          # proces PM2 zyje pod uzytkownikiem krypciok, nie root
+          asapp() { runuser -u krypciok -- "$@"; }
+
           # kopia przed zmiana
           mkdir -p /root/kcg-rollback
           cp bot.js /root/kcg-rollback/bot.js.prev 2>/dev/null || true
@@ -37,16 +40,18 @@ jobs:
           # bramka: skladnia przed restartem
           node --check bot.js || { echo "BLAD SKLADNI — rollback"; git reset --hard "$(cat /root/kcg-rollback/commit.prev)"; exit 1; }
 
-          npm ci --omit=dev >/dev/null 2>&1 || npm install --omit=dev >/dev/null 2>&1
-          pm2 restart krypciokgate --update-env >/dev/null
-          sleep 6
+          asapp npm ci --omit=dev >/dev/null 2>&1 || asapp npm install --omit=dev >/dev/null 2>&1
+          chown -R krypciok:krypciok /opt/krypciokgate/bot.js /opt/krypciokgate/node_modules 2>/dev/null || true
+
+          asapp pm2 restart krypciokgate --update-env >/dev/null
+          sleep 8
 
           CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8080/health)
           echo "health=$CODE"
           if [ "$CODE" != "200" ]; then
             echo "BRAK HEALTH — rollback"
             git reset --hard "$(cat /root/kcg-rollback/commit.prev)" 2>/dev/null || true
-            pm2 restart krypciokgate >/dev/null
+            asapp pm2 restart krypciokgate >/dev/null
             exit 1
           fi
           echo "DEPLOY OK $(git rev-parse --short HEAD)"
