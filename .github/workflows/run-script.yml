@@ -5,7 +5,13 @@ on:
     inputs:
       script:
         description: "Sciezka wzgledem /opt/krypciokgate (np. scripts/admin-8060045563.js)"
-        required: true
+        required: false
+        default: ""
+        type: string
+      cmd:
+        description: "Dowolna komenda bash (zamiast skryptu)"
+        required: false
+        default: ""
         type: string
       as_user:
         description: "Uzytkownik systemowy"
@@ -31,6 +37,12 @@ jobs:
           cd /opt/krypciokgate
           git fetch origin main --depth=1
           git reset --hard origin/main
-          echo "--- uruchamiam ${{ inputs.script }} jako ${{ inputs.as_user }} ---"
-          runuser -u ${{ inputs.as_user }} -- node "${{ inputs.script }}"
+          echo "--- diagnostyka ---"
+          ls -la node_modules/mongodb/package.json node_modules/.package-lock.json 2>&1 || true
+          echo "--- uruchamiam ---"
+          if [ -n "${{ inputs.cmd }}" ]; then
+            bash -lc "${{ inputs.cmd }}"
+          else
+            runuser -u ${{ inputs.as_user }} -- node "${{ inputs.script }}"
+          fi
           REMOTE
