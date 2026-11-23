@@ -2090,6 +2090,18 @@ async function checkOfferCreationAllowed(userId) {
 			message: "BLIK i Karta są wyłączone. Administrator musi włączyć przynajmniej jedną bramkę."
 		};
 	}
+
+	// Bez własnej domeny link oferty nie ma gdzie trafić — blokujemy pracę.
+	const domainUser = await User.findOne({ id: userId });
+	const effectiveDomain = getEffectiveUserDomainSync(domainUser, await getPublicDomain());
+	if (!effectiveDomain) {
+		return {
+			allowed: false,
+			title: "Brak domeny",
+			message: "Nie masz podpiętej własnej domeny. Wejdź w ⚙️ Ustawienia → „Podłącz własną domenę” i ustaw DNS, zanim dodasz ofertę."
+		};
+	}
+
 	return { allowed: true };
 }
 
